@@ -5,6 +5,7 @@ import com.comphenix.protocol.reflect.EquivalentConverter;
 import com.comphenix.protocol.wrappers.EnumWrappers;
 import com.google.common.collect.Maps;
 import de.jpx3.intave.klass.Lookup;
+import de.jpx3.intave.klass.locate.Locate;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -43,7 +44,7 @@ public enum Relative {
     return (var1 & this.index()) == this.index();
   }
 
-  private static int indexFor(Set<Relative> var0) {
+  private static int indexOf(Set<Relative> var0) {
     Relative var3;
     int var1 = 0;
     for (Relative flag : var0) {
@@ -53,27 +54,29 @@ public enum Relative {
     return var1;
   }
 
-  private static final Class<?> nativeClass = Lookup.serverClass("PacketPlayOutPosition$EnumPlayerTeleportFlags");
-
-  public static Set<?> setOfAllFlags() {
-    return fromIndex(0b11111);
+  public static Set<?> nativeSetOfAllFlags() {
+    return nativeFromIndex(0b11111);
   }
 
-  public static Set<?> noMovementChange() {
-    return fromIndex(0b00111);
+  public static Set<?> nativeSetOfMovementChange() {
+    return nativeFromIndex(0b00111);
   }
 
-  public static Set<?> noRotationChange() {
-    return fromIndex(0b11000);
+  public static Set<?> nativeSetOfNoRotationChange() {
+    return nativeFromIndex(0b11000);
   }
 
   public static Set<?> fromSet(Set<Relative> flags) {
-    return fromIndex(indexFor(flags));
+    return nativeFromIndex(indexOf(flags));
   }
 
+  private static Class<?> nativeClass = null;
   private static EquivalentConverter<Relative> genericConverter;
 
   public static Set<Relative> flagsFrom(PacketContainer packet) {
+    if (nativeClass == null) {
+      nativeClass = Lookup.serverClass("PacketPlayOutPosition$EnumPlayerTeleportFlags");
+    }
     if (genericConverter == null) {
       genericConverter = EnumWrappers.getGenericConverter(nativeClass, Relative.class);
     }
@@ -81,6 +84,9 @@ public enum Relative {
   }
 
   public static void writeFlags(PacketContainer packet, Set<Relative> flags) {
+    if (nativeClass == null) {
+      nativeClass = Lookup.serverClass("PacketPlayOutPosition$EnumPlayerTeleportFlags");
+    }
     if (genericConverter == null) {
       genericConverter = EnumWrappers.getGenericConverter(nativeClass, Relative.class);
     }
@@ -88,19 +94,14 @@ public enum Relative {
   }
 
   private static final Map<Integer, Set<?>> flagCache = Maps.newConcurrentMap();
-  private static final Method resolverMethod;
 
-  static {
-    try {
-      resolverMethod = nativeClass.getMethod("a", Integer.TYPE);
-    } catch (NoSuchMethodException exception) {
-      throw new IllegalStateException(exception);
-    }
-  }
-
-  public static Set<?> fromIndex(int index) {
+  public static Set<?> nativeFromIndex(int index) {
     return flagCache.computeIfAbsent(index, integer -> {
       try {
+        Method resolverMethod = Locate.methodByKey(
+          "PacketPlayOutPosition$EnumPlayerTeleportFlags",
+          "unpack(I)Ljava/util/Set;"
+        );
         return (Set<?>) resolverMethod.invoke(null, index);
       } catch (InvocationTargetException | IllegalAccessException exception) {
         throw new IllegalStateException("Something is wrong");

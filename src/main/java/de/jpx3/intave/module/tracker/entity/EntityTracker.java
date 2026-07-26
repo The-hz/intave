@@ -1,3 +1,14 @@
+/*
+ * Copyright 2026 Intave
+ *
+ * This software is licensed under the PolyForm Perimeter License 1.0.0.
+ * You may use this software for any purpose, except for providing to
+ * others any product that competes with the software.
+ *
+ * A copy of the license is available at:
+ *   https://polyformproject.org/licenses/perimeter/1.0.0/
+ */
+
 package de.jpx3.intave.module.tracker.entity;
 
 import com.comphenix.protocol.PacketType;
@@ -6,12 +17,11 @@ import com.comphenix.protocol.events.PacketEvent;
 import com.comphenix.protocol.reflect.StructureModifier;
 import com.comphenix.protocol.wrappers.WrappedWatchableObject;
 import de.jpx3.intave.IntaveControl;
-import de.jpx3.intave.IntaveLogger;
 import de.jpx3.intave.IntavePlugin;
 import de.jpx3.intave.access.player.trust.TrustFactor;
 import de.jpx3.intave.adapter.MinecraftVersions;
 import de.jpx3.intave.block.collision.entity.StaticEntityCollisions;
-import de.jpx3.intave.check.movement.physics.Pose;
+import de.jpx3.intave.check.movement.physics.environment.Pose;
 import de.jpx3.intave.entity.EntityLookup;
 import de.jpx3.intave.entity.size.HitboxSize;
 import de.jpx3.intave.entity.type.EntityTypeData;
@@ -28,15 +38,20 @@ import de.jpx3.intave.module.nayoro.event.EntityRemoveEvent;
 import de.jpx3.intave.module.nayoro.event.EntitySpawnEvent;
 import de.jpx3.intave.module.nayoro.event.sink.EventSink;
 import de.jpx3.intave.packet.PacketSender;
+import de.jpx3.intave.packet.PacketTypes;
 import de.jpx3.intave.packet.reader.EntityIterable;
 import de.jpx3.intave.packet.reader.EntityMetadataReader;
 import de.jpx3.intave.packet.reader.PacketReaders;
 import de.jpx3.intave.player.fake.FakePlayer;
 import de.jpx3.intave.player.fake.IdentifierReserve;
 import de.jpx3.intave.share.ClientMath;
+import de.jpx3.intave.share.Motion;
+import de.jpx3.intave.share.Position;
+import de.jpx3.intave.user.MessageChannel;
 import de.jpx3.intave.user.User;
 import de.jpx3.intave.user.UserRepository;
 import de.jpx3.intave.user.meta.*;
+import de.jpx3.intave.world.Particles;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Location;
@@ -53,9 +68,11 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
+import static de.jpx3.intave.check.movement.physics.environment.MoveMetric.FIREWORK_ROCKETS;
+import static de.jpx3.intave.check.movement.physics.environment.MoveMetric.TELEPORT;
 import static de.jpx3.intave.module.feedback.FeedbackOptions.*;
-import static de.jpx3.intave.module.linker.packet.PacketId.Client.POSITION;
 import static de.jpx3.intave.module.linker.packet.PacketId.Client.*;
+import static de.jpx3.intave.module.linker.packet.PacketId.Client.POSITION;
 import static de.jpx3.intave.module.linker.packet.PacketId.Server.*;
 import static de.jpx3.intave.user.meta.ConnectionMetadata.DecoySide.FIRST_IS_DECOY;
 import static de.jpx3.intave.user.meta.ConnectionMetadata.DecoySide.SECOND_IS_DECOY;
@@ -110,7 +127,7 @@ public final class EntityTracker extends Module {
       int vehicleId = packet.getIntegers().read(0);
       Entity vehicle = UserRepository.userOf(player).meta().connection().entityBy(vehicleId);
       if (vehicle == null) {
-        IntaveLogger.logger().error("Vehicle entity not found in mount request: " + vehicleId);
+//        IntaveLogger.logger().error("Vehicle entity not found in mount request: " + vehicleId);
         detachEntity(user, vehicleId, -1);
         return;
       }
@@ -380,7 +397,7 @@ public final class EntityTracker extends Module {
       typeData = new EntityTypeData(entityName, hitBoxSize, 105, true, 1);
     }
     if (typeData == null) {
-      if (IntaveControl.DISABLE_LICENSE_CHECK) {
+      if (IntaveControl.DEBUG) {
         IntavePlugin.singletonInstance().logger().error("Cannot resolve entityType: " + entityId);
       }
       return null;
@@ -483,61 +500,21 @@ public final class EntityTracker extends Module {
   @PacketSubscription(
     priority = ListenerPriority.HIGHEST,
     packetsIn = {
-      POSITION, POSITION_LOOK, LOOK, FLYING, STEER_VEHICLE
+      POSITION, POSITION_LOOK, LOOK, FLYING, STEER_VEHICLE, CLIENT_TICK_END
     }
   )
   public void receiveMovement(PacketEvent event) {
     Player player = event.getPlayer();
     User user = UserRepository.userOf(player);
-    if (user.meta().protocol().sendsClientTickEnd()) {
-      return;
-    }
-    ConnectionMetadata synchronizeData = user.meta().connection();
-    MovementMetadata movement = user.meta().movement();
-    if (movement.lastTeleport == 0) {
-      return;
-    }
-    for (Entity entity : synchronizeData.entities()) {
-      int ticksAfterPositionChange = entity.position.newPosRotationIncrements;
-      entity.onUpdate();
-      if (entity.tracingEnabled() && ticksAfterPositionChange > 0) {
-        nayoroEntityPositionUpdate(player, entity);
-      }
-      if (movement.isRiding(entity.entityId()) && !MinecraftVersions.VER1_9_0.atOrAbove()) {
-        double originalX = entity.position.newPosX;
-        double originalY = entity.position.newPosY;
-        double originalZ = entity.position.newPosZ;
-        if (Math.abs(originalX) < 0.1 && Math.abs(originalY) < 0.1 && Math.abs(originalZ) < 0.1) {
-          originalX = entity.position.posX;
-          originalY = entity.position.posY;
-          originalZ = entity.position.posZ;
-        }
-        movement.positionX = movement.verifiedPositionX = movement.lastPositionX = originalX;
-        movement.positionY = movement.verifiedPositionY = movement.lastPositionY = originalY;
-        movement.positionZ = movement.verifiedPositionZ = movement.lastPositionZ = originalZ;
-        movement.verifiedPositionOrigin = "Riding pos sync (1.8)";
-        movement.setBaseMotionX(0);
-        movement.setBaseMotionY(0);
-        movement.setBaseMotionZ(0);
-      }
-    }
-  }
+    PacketType packetType = event.getPacketType();
 
-  @PacketSubscription(
-    packetsIn = {
-      CLIENT_TICK_END
-    },
-    debug = true
-  )
-  public void on(PacketEvent event) {
-    Player player = event.getPlayer();
-    User user = UserRepository.userOf(player);
-    if (!user.meta().protocol().sendsClientTickEnd()) {
+    boolean isClientTickEnd = PacketTypes.isClientEndTick(packetType);
+    if (user.meta().protocol().sendsClientTickEnd() && !isClientTickEnd) {
       return;
     }
     ConnectionMetadata synchronizeData = user.meta().connection();
     MovementMetadata movement = user.meta().movement();
-    if (movement.lastTeleport == 0) {
+    if (movement.ticksPast(TELEPORT) == 0) {
       return;
     }
     for (Entity entity : synchronizeData.entities()) {
@@ -546,6 +523,13 @@ public final class EntityTracker extends Module {
       if (entity.tracingEnabled() && ticksAfterPositionChange > 0) {
         nayoroEntityPositionUpdate(player, entity);
       }
+
+      if (user.receives(MessageChannel.DEBUG_HITBOXES)) {
+        for (Position vertex : entity.boundingBox().vertices()) {
+          Particles.spawnVillagerHappyParticleAt(user, vertex);
+        }
+      }
+
       if (movement.isRiding(entity.entityId()) && !MinecraftVersions.VER1_9_0.atOrAbove()) {
         double originalX = entity.position.newPosX;
         double originalY = entity.position.newPosY;
@@ -555,13 +539,12 @@ public final class EntityTracker extends Module {
           originalY = entity.position.posY;
           originalZ = entity.position.posZ;
         }
-        movement.positionX = movement.verifiedPositionX = movement.lastPositionX = originalX;
-        movement.positionY = movement.verifiedPositionY = movement.lastPositionY = originalY;
-        movement.positionZ = movement.verifiedPositionZ = movement.lastPositionZ = originalZ;
+        movement.positionX = movement.verifiedLastPositionX = movement.lastPositionX = originalX;
+        movement.positionY = movement.verifiedLastPositionY = movement.lastPositionY = originalY;
+        movement.positionZ = movement.verifiedLastPositionZ = movement.lastPositionZ = originalZ;
         movement.verifiedPositionOrigin = "Riding pos sync (1.8)";
-        movement.setBaseMotionX(0);
-        movement.setBaseMotionY(0);
-        movement.setBaseMotionZ(0);
+        movement.setBaseMotion(Motion.newEmpty());
+        movement.clearPostTickMotionCandidates();
       }
     }
   }
@@ -923,7 +906,7 @@ public final class EntityTracker extends Module {
 
   @PacketSubscription(
     packetsIn = {
-      USE_ENTITY
+      ATTACK_ENTITY, USE_ENTITY
     },
     priority = ListenerPriority.LOWEST
   )
@@ -1119,7 +1102,7 @@ public final class EntityTracker extends Module {
           power = Math.max(fireworkMeta.getPower(), 1);
         }
       }
-      movement.fireworkRocketsTicks = 0;
+      movement.activeTick(FIREWORK_ROCKETS);
       movement.fireworkRocketsPower = power;
     }
   }
@@ -1139,7 +1122,7 @@ public final class EntityTracker extends Module {
     int entityId = optionalId.getAsInt();
     MovementMetadata movement = user.meta().movement();
     InventoryMetadata inventory = user.meta().inventory();
-    if ((movement.pose() == Pose.FALL_FLYING || movement.elytraFlying) && entityId == player.getEntityId()) {
+    if ((movement.pose() == Pose.FALL_FLYING || movement.gliding) && entityId == player.getEntityId()) {
       int power = 1;
       ItemStack firework = null;
       // Choose firework item
@@ -1156,7 +1139,7 @@ public final class EntityTracker extends Module {
           power = Math.max(fireworkMeta.getPower(), 1);
         }
       }
-      movement.fireworkRocketsTicks = 0;
+      movement.activeTick(FIREWORK_ROCKETS);
       movement.fireworkRocketsPower = power;
     }
   }

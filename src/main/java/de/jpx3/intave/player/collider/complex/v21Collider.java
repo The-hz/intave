@@ -1,9 +1,20 @@
+/*
+ * Copyright 2026 Intave
+ *
+ * This software is licensed under the PolyForm Perimeter License 1.0.0.
+ * You may use this software for any purpose, except for providing to
+ * others any product that competes with the software.
+ *
+ * A copy of the license is available at:
+ *   https://polyformproject.org/licenses/perimeter/1.0.0/
+ */
+
 package de.jpx3.intave.player.collider.complex;
 
 import de.jpx3.intave.block.collision.Collision;
 import de.jpx3.intave.block.shape.BlockShape;
 import de.jpx3.intave.block.shape.BlockShapes;
-import de.jpx3.intave.check.movement.physics.SimulationEnvironment;
+import de.jpx3.intave.check.movement.physics.environment.SimulationEnvironment;
 import de.jpx3.intave.share.BoundingBox;
 import de.jpx3.intave.share.Motion;
 import de.jpx3.intave.user.User;
@@ -12,7 +23,6 @@ import it.unimi.dsi.fastutil.doubles.DoubleSet;
 import it.unimi.dsi.fastutil.floats.FloatArraySet;
 import it.unimi.dsi.fastutil.floats.FloatArrays;
 import it.unimi.dsi.fastutil.floats.FloatSet;
-import org.bukkit.entity.Player;
 
 import java.util.Arrays;
 
@@ -20,10 +30,10 @@ import static de.jpx3.intave.share.Direction.Axis.*;
 
 public final class v21Collider implements Collider {
   @Override
-  public ColliderResult collide(
+  public SimulationResult collide(
     User user,
     SimulationEnvironment environment,
-    Motion motion,
+    Motion offsetMotion,
     double positionX,
     double positionY,
     double positionZ,
@@ -31,33 +41,39 @@ public final class v21Collider implements Collider {
   ) {
     // webs
     if (inWeb) {
-      motion.motionX *= 0.25D;
-      motion.motionY *= 0.05f;
-      motion.motionZ *= 0.25D;
+      offsetMotion.motionX *= 0.25D;
+      offsetMotion.motionY *= 0.05f;
+      offsetMotion.motionZ *= 0.25D;
     }
+
+    Motion actualMotion = inWeb ? Motion.newEmpty() : offsetMotion.copy();
 
     // "maybeBackOffFromEdge"
     boolean edgeSneak = false;
     if (environment.onGround() && environment.isSneaking()) {
-      edgeSneak = calculateBackOffFromEdge(user, environment, environment.stepHeight(), motion);
+      edgeSneak = calculateBackOffFromEdge(user, environment, environment.stepHeight(), offsetMotion);
     }
 
+    Motion maybeBackOffFromEdgeResult = Motion.copyFrom(offsetMotion);
+
     // "collide"
-    double initialX = motion.motionX;
-    double initialY = motion.motionY;
-    double initialZ = motion.motionZ;
+    double initialX = offsetMotion.motionX;
+    double initialY = offsetMotion.motionY;
+    double initialZ = offsetMotion.motionZ;
 
     boolean[] stepped = new boolean[1];
-    motion.setTo(motionAfterCollision(user, environment, motion, stepped));
+    offsetMotion.setTo(motionAfterCollision(user, environment, offsetMotion, stepped));
 
-    boolean collidedVertically = initialY != motion.motionY;
-    boolean collidedHorizontally = initialX != motion.motionX || initialZ != motion.motionZ;
-    boolean onGround = initialY != motion.motionY && initialY < 0.0;
-    boolean moveResetX = initialX != motion.motionX;
-    boolean moveResetZ = initialZ != motion.motionZ;
+    boolean collidedVertically = initialY != offsetMotion.motionY;
+    boolean collidedHorizontally = initialX != offsetMotion.motionX || initialZ != offsetMotion.motionZ;
+    boolean onGround = initialY != offsetMotion.motionY && initialY < 0.0;
+    boolean moveResetX = initialX != offsetMotion.motionX;
+    boolean moveResetZ = initialZ != offsetMotion.motionZ;
 
-    return new ColliderResult(
-      Motion.copyFrom(motion),
+    return new SimulationResult(
+      Motion.copyFrom(actualMotion),
+      Motion.copyFrom(offsetMotion),
+      Motion.copyFrom(maybeBackOffFromEdgeResult),
       onGround,
       collidedHorizontally,
       collidedVertically,
@@ -69,13 +85,12 @@ public final class v21Collider implements Collider {
   }
 
   private boolean calculateBackOffFromEdge(User user, SimulationEnvironment environment, double length, Motion context) {
-    Player player = user.player();
     BoundingBox boundingBox = environment.boundingBox();
     double motionX = context.motionX;
     double motionZ = context.motionZ;
     boolean edgeSneak = false;
     while (motionX != 0.0D
-      && Collision.nonePresent(player, boundingBox.offset(motionX, -length, 0.0D))) {
+      && Collision.nonePresent(user, environment, boundingBox.offset(motionX, -length, 0.0D))) {
       if (motionX < 0.05D && motionX >= -0.05D) {
         motionX = 0.0D;
       } else if (motionX > 0.0D) {
@@ -86,7 +101,7 @@ public final class v21Collider implements Collider {
       edgeSneak = true;
     }
     while (motionZ != 0.0D
-      && Collision.nonePresent(player, boundingBox.offset(0.0D, -length, motionZ))) {
+      && Collision.nonePresent(user, environment, boundingBox.offset(0.0D, -length, motionZ))) {
       if (motionZ < 0.05D && motionZ >= -0.05D) {
         motionZ = 0.0D;
       } else if (motionZ > 0.0D) {
@@ -98,7 +113,7 @@ public final class v21Collider implements Collider {
     }
     while (motionX != 0.0D
       && motionZ != 0.0D
-      && Collision.nonePresent(player, boundingBox.offset(motionX, -length, motionZ))) {
+      && Collision.nonePresent(user, environment, boundingBox.offset(motionX, -length, motionZ))) {
       if (motionX < 0.05D && motionX >= -0.05D) {
         motionX = 0.0D;
       } else if (motionX > 0.0D) {
@@ -122,7 +137,7 @@ public final class v21Collider implements Collider {
 
   private Motion motionAfterCollision(User user, SimulationEnvironment environment, Motion motion, boolean[] stepped) {
     BoundingBox box = environment.boundingBox();
-    BlockShape collisionShape = Collision.shape(user.player(), box.expand(motion));
+    BlockShape collisionShape = Collision.shape(user, environment, box.expand(motion));
     Motion firstCollision = motion.length() == 0.0D ? motion : collideSingleBox(motion, box, collisionShape);
     boolean xChange = motion.motionX != firstCollision.motionX;
     boolean yChange = motion.motionY != firstCollision.motionY;
@@ -134,7 +149,7 @@ public final class v21Collider implements Collider {
       if (!yChangeAndFalling) {
         box3 = box3.offset(0, -0.00001f, 0);
       }
-      BlockShape newCollisionShape = Collision.shape(user.player(), box3);
+      BlockShape newCollisionShape = Collision.shape(user, environment, box3);
       BlockShape combinedShape = BlockShapes.merge(collisionShape, newCollisionShape);
       float[] floats = collectCandidateStepUpHeights(box2, combinedShape, (float) environment.stepHeight(), (float) firstCollision.motionY);
       for (float step : floats) {

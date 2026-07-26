@@ -1,6 +1,17 @@
+/*
+ * Copyright 2026 Intave
+ *
+ * This software is licensed under the PolyForm Perimeter License 1.0.0.
+ * You may use this software for any purpose, except for providing to
+ * others any product that competes with the software.
+ *
+ * A copy of the license is available at:
+ *   https://polyformproject.org/licenses/perimeter/1.0.0/
+ */
+
 package de.jpx3.intave.command.stages;
 
-import de.jpx3.intave.IntaveControl;
+import com.comphenix.protocol.ProtocolLibrary;
 import de.jpx3.intave.IntavePlugin;
 import de.jpx3.intave.access.player.trust.TrustFactor;
 import de.jpx3.intave.command.CommandStage;
@@ -10,9 +21,9 @@ import de.jpx3.intave.command.SubCommand;
 import de.jpx3.intave.module.Modules;
 import de.jpx3.intave.module.actionbar.ActionBarDisplayer;
 import de.jpx3.intave.module.actionbar.DisplayType;
+import de.jpx3.intave.module.test.PhysicsTestRecorder;
 import de.jpx3.intave.module.violation.ViolationVerboseMode;
 import de.jpx3.intave.player.ProfileLookup;
-import de.jpx3.intave.security.LicenseAccess;
 import de.jpx3.intave.user.MessageChannel;
 import de.jpx3.intave.user.User;
 import de.jpx3.intave.user.UserRepository;
@@ -24,6 +35,7 @@ import de.jpx3.intave.user.storage.StorageViolationEvent;
 import de.jpx3.intave.user.storage.StorageViolationEvents;
 import de.jpx3.intave.version.DurationTranslator;
 import de.jpx3.intave.version.IntaveVersion;
+import net.md_5.bungee.api.chat.ClickEvent;
 import net.md_5.bungee.api.chat.HoverEvent;
 import net.md_5.bungee.api.chat.TextComponent;
 import net.md_5.bungee.chat.ComponentSerializer;
@@ -34,6 +46,8 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 
+import java.io.File;
+import java.io.IOException;
 import java.text.DateFormat;
 import java.text.MessageFormat;
 import java.text.SimpleDateFormat;
@@ -178,18 +192,18 @@ public final class BaseStage extends CommandStage {
     description = "Toggle debug messages",
     permission = "intave.command.verbose"
   )
-  public void debug(User user, DebugType type, @Optional Player target) {
+  public void debug(User user, DebugType type) {
     Player player = user.player();
     boolean receivesDebug = user.receives(type.channel);
 
     user.toggleReceive(type.channel);
     user.removeChannelConstraint(type.channel);
 
+    String cleanType = type.name().toLowerCase().replace("_", " ");
     if (receivesDebug) {
-      player.sendMessage(IntavePlugin.prefix() + "You are " + ChatColor.RED + "no longer " + IntavePlugin.defaultColor() + "receiving " + ChatColor.RED + type.name().toLowerCase().replace("_", " ") + IntavePlugin.defaultColor() + " debug messages");
+      player.sendMessage(IntavePlugin.prefix() + "You are " + ChatColor.RED + "no longer " + IntavePlugin.defaultColor() + "receiving " + ChatColor.RED + cleanType + IntavePlugin.defaultColor() + " debug messages");
     } else {
-      player.sendMessage(IntavePlugin.prefix() + "You are " + ChatColor.GREEN + "now " + IntavePlugin.defaultColor() + "receiving " + ChatColor.RED + type.name().toLowerCase().replace("_", " ") + IntavePlugin.defaultColor() + " debug messages");
-      user.setChannelConstraint(type.channel, target != null ? player1 -> player1.getUniqueId().equals(target.getUniqueId()) : player1 -> true);
+      player.sendMessage(IntavePlugin.prefix() + "You are " + ChatColor.GREEN + "now " + IntavePlugin.defaultColor() + "receiving " + ChatColor.RED + cleanType + IntavePlugin.defaultColor() + " debug messages");
     }
   }
 
@@ -200,6 +214,16 @@ public final class BaseStage extends CommandStage {
     BLOCK_CACHE(MessageChannel.DEBUG_BLOCK_CACHE),
     POSITION(MessageChannel.DEBUG_POSITION),
     PACKET_HOLD(MessageChannel.DEBUG_PACKET_HOLD),
+    COLLISIONS(MessageChannel.DEBUG_COLLISIONS),
+    NERFS(MessageChannel.DEBUG_NERFS),
+    HITBOXES(MessageChannel.DEBUG_HITBOXES),
+    HITBOX(MessageChannel.DEBUG_HITBOX),
+    HITRAY(MessageChannel.DEBUG_HITRAY),
+    MOVEMENT(MessageChannel.DEBUG_MOVEMENT),
+    MOTION(MessageChannel.DEBUG_MOTION),
+    SENT_INPUT(MessageChannel.DEBUG_SENT_INPUT),
+    PLAYER_ACTIONS(MessageChannel.DEBUG_PLAYER_ACTIONS),
+    ATTACK_RAYTRACE(MessageChannel.DEBUG_ATTACK_RAYTRACE),
 
     ;
 
@@ -289,24 +313,74 @@ public final class BaseStage extends CommandStage {
     }
   }
 
-//  @SubCommand(
-//    selectors = "notify",
-//    usage = "",
-//    description = "Toggle notifications",
-//    permission = "intave.command.notify"
-//  )
-//  public void notifyCommand(User user) {
-//    Player player = user.player();
-//
-//    boolean receiveNotify = user.receives(MessageChannel.NOTIFY);
-//    user.toggleReceive(MessageChannel.NOTIFY);
-//
-//    if (receiveNotify) {
-//      player.sendMessage(IntavePlugin.prefix() + "You are " + ChatColor.RED + "no longer " + IntavePlugin.defaultColor() + "receiving notifications");
-//    } else {
-//      player.sendMessage(IntavePlugin.prefix() + "You are " + ChatColor.GREEN + "now " + IntavePlugin.defaultColor() + "receiving notifications");
-//    }
-//  }
+  @SubCommand(selectors = "dump")
+  public void dump(CommandSender sender) {
+    Player player = null;
+    String playerVersion = "";
+    if (sender instanceof Player) {
+      player = ((Player) sender);
+      User user = UserRepository.userOf(player);
+      ProtocolMetadata protocol = user.meta().protocol();
+      playerVersion = protocol.versionString() + "@" + protocol.protocolVersion();
+      sender.sendMessage(ChatColor.GRAY + "Player is " + ChatColor.WHITE + playerVersion);
+    } else {
+      sender.sendMessage(ChatColor.GRAY + "Run this command in-game to display client version");
+    }
+    String intaveVersion = IntavePlugin.fullVersion();
+    String serverVersion = Bukkit.getName() + "@" + Bukkit.getVersion();
+    String protocolLibVersion = ProtocolLibrary.getPlugin().getDescription().getVersion();
+    sender.sendMessage(ChatColor.GRAY + "Spigot is " + ChatColor.WHITE + serverVersion);
+    sender.sendMessage(ChatColor.GRAY + "ProtocolLib is " + ChatColor.WHITE + protocolLibVersion);
+    sender.sendMessage(ChatColor.GRAY + "Intave is " + ChatColor.WHITE + intaveVersion);
+
+    TextComponent message = new TextComponent("[Copy report message to chat]");
+    message.setColor(net.md_5.bungee.api.ChatColor.GRAY);
+    message.setClickEvent(new ClickEvent(ClickEvent.Action.SUGGEST_COMMAND, "Environment: `" + playerVersion + "`,`" + serverVersion + "`,`" + protocolLibVersion + "`,`" + intaveVersion + "`"));
+
+    if (player != null) {
+      // Send the message to the player
+      player.spigot().sendMessage(message);
+    }
+  }
+
+  @SubCommand(selectors = "record")
+  public void recordCommand(User user) {
+    PhysicsTestRecorder recorder = Modules.physicsTestRecorder();
+    boolean recording = recorder.isRecording(user);
+    recorder.setRecordingStatus(user, !recording);
+
+    if (recording) {
+      user.player().sendMessage(ChatColor.RED + "Stopped recording..");
+
+      File file;
+      File resourcesFolder = new File(IntavePlugin.singletonInstance().dataFolder(), "../../../../src/test/resources");
+      if (resourcesFolder.exists()) {
+        file = new File(
+          resourcesFolder,
+          "/physics_test_runs/pending/" + UUID.randomUUID() + ".ptr"
+        );
+      } else {
+        file = new File(
+          IntavePlugin.singletonInstance().dataFolder(),
+          "/recordings/" + UUID.randomUUID() + ".ptr"
+        );
+      }
+      file.getParentFile().mkdirs();
+      try {
+        recorder.saveRecordingDataTo(user, file);
+      } catch (IOException e) {
+        user.player().sendMessage(ChatColor.RED + "Failed to save recording: " + e.getMessage());
+        return;
+      }
+      try {
+        user.player().sendMessage(ChatColor.GREEN + "Saved recording to " + file.getCanonicalPath());
+      } catch (IOException e) {
+        user.player().sendMessage(ChatColor.GREEN + "Saved recording to " + file.getAbsolutePath());
+      }
+    } else {
+      user.player().sendMessage(ChatColor.GREEN + "Started recording..");
+    }
+  }
 
   @SubCommand(
     selectors = {"history", "logs"},
@@ -607,19 +681,16 @@ public final class BaseStage extends CommandStage {
   private void sendVersionMessage(CommandSender player) {
     boolean hasVersionViewPermission = BukkitPermissionCheck.permissionCheck(player, "intave.command");
 
-    IntaveVersion versionInformation = IntavePlugin.singletonInstance().versions().versionInformation(IntavePlugin.version());
+    IntaveVersion versionInformation = IntavePlugin.singletonInstance().versions().versionInformation(IntavePlugin.versionTag());
     String version;
     if (!hasVersionViewPermission) {
       version = "(version hidden)";
     } else if (versionInformation != null) {
       boolean outdated = versionInformation.outdated();
-      version = IntavePlugin.version() + " (" + (outdated ? "outdated, " : "") + DurationTranslator.translateHours(System.currentTimeMillis() - versionInformation.release()) + " old)";
+      version = IntavePlugin.fullVersion() + " (" + (outdated ? "outdated, " : "") + DurationTranslator.translateHours(System.currentTimeMillis() - versionInformation.release()) + " old)";
     } else {
-      version = IntavePlugin.version() + " (unknown version)";
+      version = IntavePlugin.fullVersion() + " (unknown version)";
     }
-
-    boolean enterprise = (ProtocolMetadata.VERSION_DETAILS & 0x200) != 0;
-    boolean partner = (ProtocolMetadata.VERSION_DETAILS & 0x100) != 0;
 
     String prefix = IntavePlugin.prefix();
     player.sendMessage(new String[]{

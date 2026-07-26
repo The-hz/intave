@@ -1,8 +1,18 @@
+/*
+ * Copyright 2026 Intave
+ *
+ * This software is licensed under the PolyForm Perimeter License 1.0.0.
+ * You may use this software for any purpose, except for providing to
+ * others any product that competes with the software.
+ *
+ * A copy of the license is available at:
+ *   https://polyformproject.org/licenses/perimeter/1.0.0/
+ */
+
 package de.jpx3.intave.block.type;
 
-import com.comphenix.protocol.utility.MinecraftVersion;
-import de.jpx3.intave.IntavePlugin;
 import de.jpx3.intave.access.IntaveInternalException;
+import de.jpx3.intave.adapter.MinecraftVersion;
 import de.jpx3.intave.block.access.BlockAccess;
 import de.jpx3.intave.block.access.VolatileBlockAccess;
 import de.jpx3.intave.resource.Resource;
@@ -15,7 +25,6 @@ import org.bukkit.block.Block;
 import org.bukkit.entity.Player;
 
 import java.util.Arrays;
-import java.util.concurrent.TimeUnit;
 
 import static de.jpx3.intave.diagnostic.timings.Timings.SERVICE_TYPE_LOOKUP;
 
@@ -28,6 +37,9 @@ public final class BlockTypeAccess {
   public static final Material END_PORTAL_FRAME = resolveFrom("END_PORTAL_FRAME", "ENDER_PORTAL_FRAME");
   public static final Material SKULL = resolveFrom("SKULL", "LEGACY_SKULL");
   public static final Material COBBLESTONE_WALL = resolveFrom("COBBLESTONE_WALL", "COBBLE_WALL");
+  public static final Material POWDER_SNOW = MaterialSearch.materialThatIsNamed("POWDER_SNOW");
+  public static final Material BUBBLE_COLUMN = Material.getMaterial("BUBBLE_COLUMN");
+
 
   public static void setup() {
   }
@@ -47,11 +59,11 @@ public final class BlockTypeAccess {
     throw new IntaveInternalException("Unable to find block for " + Arrays.toString(names));
   }
 
-  private static final Resource MAPPING_RESOURCE = Resources.localServiceCacheResource("bbm/" + IntavePlugin.version(),  "bbm", TimeUnit.DAYS.toMillis(14));
+  private static final Resource MAPPING_RESOURCE = Resources.resourceFromJarOrBuild("bbm.mapping");
   private static final TypeTranslations TYPE_TRANSLATIONS = MAPPING_RESOURCE.collectLines(VerTraFileTypeTranslator.lineCollector());
 
   public static void setupTranslationsFor(User user) {
-    MinecraftVersion serverVersion = MinecraftVersion.getCurrentVersion();
+    MinecraftVersion serverVersion = MinecraftVersion.current();
     MinecraftVersion clientVersion = user.meta().protocol().minecraftVersion();
     user.clearTypeTranslations();
     TYPE_TRANSLATIONS.specifiedTo(serverVersion, clientVersion).forEachType(user::applyTypeTranslation);

@@ -1,21 +1,31 @@
+/*
+ * Copyright 2026 Intave
+ *
+ * This software is licensed under the PolyForm Perimeter License 1.0.0.
+ * You may use this software for any purpose, except for providing to
+ * others any product that competes with the software.
+ *
+ * A copy of the license is available at:
+ *   https://polyformproject.org/licenses/perimeter/1.0.0/
+ */
+
 package de.jpx3.intave.player.collider.complex;
 
 import de.jpx3.intave.block.collision.Collision;
 import de.jpx3.intave.block.shape.BlockShape;
-import de.jpx3.intave.check.movement.physics.SimulationEnvironment;
+import de.jpx3.intave.check.movement.physics.environment.SimulationEnvironment;
 import de.jpx3.intave.share.BoundingBox;
 import de.jpx3.intave.share.Motion;
 import de.jpx3.intave.user.User;
-import org.bukkit.entity.Player;
 
 import static de.jpx3.intave.share.Direction.Axis.*;
 
 public final class v14Collider implements Collider {
   @Override
-  public ColliderResult collide(
+  public SimulationResult collide(
     User user,
     SimulationEnvironment environment,
-    Motion motion,
+    Motion offsetMotion,
     double positionX,
     double positionY,
     double positionZ,
@@ -23,51 +33,60 @@ public final class v14Collider implements Collider {
   ) {
     // webs
     if (inWeb) {
-      motion.motionX *= 0.25D;
-      motion.motionY *= 0.05f;
-      motion.motionZ *= 0.25D;
+      offsetMotion.motionX *= 0.25D;
+      offsetMotion.motionY *= 0.05f;
+      offsetMotion.motionZ *= 0.25D;
     }
+
+    Motion actualMotion = inWeb ? Motion.newEmpty() : offsetMotion.copy();
 
     // "maybeBackOffFromEdge"
     boolean edgeSneak = false;
     if (environment.onGround() && environment.isSneaking()) {
-      edgeSneak = calculateBackOffFromEdge(user, environment, environment.stepHeight(), motion);
+      edgeSneak = calculateBackOffFromEdge(user, environment, environment.stepHeight(), offsetMotion);
     }
 
     // "collide"
-    double initialX = motion.motionX;
-    double initialY = motion.motionY;
-    double initialZ = motion.motionZ;
+    double afterBOFEMotionX = offsetMotion.motionX;
+    double afterBOFEMotionY = offsetMotion.motionY;
+    double afterBOFEMotionZ = offsetMotion.motionZ;
 
     boolean[] stepped = new boolean[1];
-    motion.setTo(motionAfterCollision(user, environment, motion, stepped));
+    offsetMotion.setTo(motionAfterCollision(user, environment, offsetMotion, stepped));
 
-    boolean collidedVertically = initialY != motion.motionY;
-    boolean collidedHorizontally = initialX != motion.motionX || initialZ != motion.motionZ;
-    boolean onGround = initialY != motion.motionY && initialY < 0.0;
-    boolean moveResetX = initialX != motion.motionX;
-    boolean moveResetZ = initialZ != motion.motionZ;
-
-    return new ColliderResult(
-      Motion.copyFrom(motion),
+    boolean collidedVertically = afterBOFEMotionY != offsetMotion.motionY;
+    boolean collidedHorizontally = !epsilonEquals(afterBOFEMotionX, offsetMotion.motionX) || !epsilonEquals(afterBOFEMotionZ, offsetMotion.motionZ);
+    boolean onGround = afterBOFEMotionY != offsetMotion.motionY && afterBOFEMotionY < 0.0;
+    boolean moveResetX = afterBOFEMotionX != offsetMotion.motionX;
+    boolean moveResetZ = afterBOFEMotionZ != offsetMotion.motionZ;
+//    if (moveResetX) {
+//      actualMotion.motionX = 0.0D;
+//    }
+//    if (moveResetZ) {
+//      actualMotion.motionZ = 0.0D;
+//    }
+    return new SimulationResult(
+      actualMotion.copy(),
+      offsetMotion.copy(),
+      null,
       onGround,
       collidedHorizontally,
       collidedVertically,
       moveResetX,
       moveResetZ,
-      stepped[0], edgeSneak,
+      stepped[0],
+      edgeSneak,
       environment.stepHeight()
     );
   }
 
   private boolean calculateBackOffFromEdge(User user, SimulationEnvironment environment, double length, Motion context) {
-    Player player = user.player();
     BoundingBox boundingBox = environment.boundingBox();
     double motionX = context.motionX;
     double motionZ = context.motionZ;
     boolean edgeSneak = false;
     while (motionX != 0.0D
-      && Collision.nonePresent(player, boundingBox.offset(motionX, -length, 0.0D))) {
+      && Collision.nonePresent(user, environment, boundingBox.offset(motionX, -length, 0.0D))) {
       if (motionX < 0.05D && motionX >= -0.05D) {
         motionX = 0.0D;
       } else if (motionX > 0.0D) {
@@ -78,7 +97,7 @@ public final class v14Collider implements Collider {
       edgeSneak = true;
     }
     while (motionZ != 0.0D
-      && Collision.nonePresent(player, boundingBox.offset(0.0D, -length, motionZ))) {
+      && Collision.nonePresent(user, environment, boundingBox.offset(0.0D, -length, motionZ))) {
       if (motionZ < 0.05D && motionZ >= -0.05D) {
         motionZ = 0.0D;
       } else if (motionZ > 0.0D) {
@@ -90,7 +109,7 @@ public final class v14Collider implements Collider {
     }
     while (motionX != 0.0D
       && motionZ != 0.0D
-      && Collision.nonePresent(player, boundingBox.offset(motionX, -length, motionZ))) {
+      && Collision.nonePresent(user, environment, boundingBox.offset(motionX, -length, motionZ))) {
       if (motionX < 0.05D && motionX >= -0.05D) {
         motionX = 0.0D;
       } else if (motionX > 0.0D) {
@@ -114,7 +133,7 @@ public final class v14Collider implements Collider {
 
   private Motion motionAfterCollision(User user, SimulationEnvironment environment, Motion motion, boolean[] stepped) {
     BoundingBox aabb = environment.boundingBox();
-    BlockShape collisionShape = Collision.shape(user.player(), aabb.expand(motion));
+    BlockShape collisionShape = Collision.shape(user, environment, aabb.expand(motion));
     Motion firstCollision = motion.length() == 0.0D ? motion : collideSingleBox(motion, aabb, collisionShape);
     boolean xChange = motion.motionX != firstCollision.motionX;
     boolean yChange = motion.motionY != firstCollision.motionY;
@@ -168,5 +187,9 @@ public final class v14Collider implements Collider {
       motionZ = collision.allowedOffset(Z_AXIS, playerBox, motionZ);
     }
     return new Motion(motionX, motionY, motionZ);
+  }
+
+  private static boolean epsilonEquals(double a, double b) {
+    return Math.abs(b - a) < (double) 0.00001f;
   }
 }

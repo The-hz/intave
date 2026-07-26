@@ -1,3 +1,14 @@
+/*
+ * Copyright 2026 Intave
+ *
+ * This software is licensed under the PolyForm Perimeter License 1.0.0.
+ * You may use this software for any purpose, except for providing to
+ * others any product that competes with the software.
+ *
+ * A copy of the license is available at:
+ *   https://polyformproject.org/licenses/perimeter/1.0.0/
+ */
+
 package de.jpx3.intave.user.meta;
 
 import de.jpx3.intave.IntaveControl;
@@ -20,6 +31,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
+
+import static de.jpx3.intave.check.movement.physics.environment.MoveMetric.RIPTIDE_SPIN;
 
 public final class InventoryMetadata {
   private final Player player;
@@ -87,6 +100,22 @@ public final class InventoryMetadata {
     return ItemProperties.canItemBeUsed(player, heldItem()) || ItemProperties.canItemBeUsed(player, offhandItem());
   }
 
+  public boolean usableItemInEitherHandOrHotbar() {
+    if (player == null) {
+      return false;
+    }
+    if (usableItemInEitherHand()) {
+      return true;
+    }
+    for (int i = 0; i < 9; i++) {
+      ItemStack item = player.getInventory().getItem(i);
+      if (ItemProperties.canItemBeUsed(player, item)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   @Nullable
   public Material offhandItemType() {
     ItemStack item = offhandItem();
@@ -117,6 +146,9 @@ public final class InventoryMetadata {
         return;
       }
       this.handActive = true;
+
+      User user = UserRepository.userOf(player);
+      user.meta().movement().handItemSimulationFails = 0;
 
       if (offhandItemPrimary()) {
         this.foodItem = ItemProperties.foodConsumable(player, offhandItemType());
@@ -152,7 +184,7 @@ public final class InventoryMetadata {
       ItemStack offhandItem = offhandItem();
       if ((heldItem != null && Enchantments.tridentRiptideEnchanted(heldItem))
         || (offhandItem != null && Enchantments.tridentRiptideEnchanted(offhandItem))) {
-        movementData.pastRiptideSpin = 0;
+        movementData.activeTick(RIPTIDE_SPIN);
         movementData.highestLocalRiptideLevel = Math.max(
           movementData.highestLocalRiptideLevel,
           Math.max(Enchantments.resolveRiptideModifier(heldItem), Enchantments.resolveRiptideModifier(offhandItem))
@@ -189,6 +221,25 @@ public final class InventoryMetadata {
     releaseItemType = heldItemType();
   }
 
+  public void updateSlotSwitch() {
+    if (slotSwitchData != null) {
+      int slot = slotSwitchData.slot();
+      ItemStack item = slotSwitchData.item();
+
+      boolean primaryItemUsable = ItemProperties.canItemBeUsed(player, item);
+      boolean offhandItemUsage = ItemProperties.canItemBeUsed(player, offhandItem());
+      boolean handActive = (primaryItemUsable || offhandItemUsage) && handActive();
+      if (handActive) {
+        activateHand();
+      } else {
+       deactivateHand();
+      }
+      setHeldItemSlot(slot);
+      pastHotBarSlotChange = 0;
+      slotSwitchData = null;
+    }
+  }
+
   public void setHeldItemSlot(int slot) {
     this.handSlot = slot;
   }
@@ -216,6 +267,20 @@ public final class InventoryMetadata {
 
   public boolean foodItem() {
     return foodItem;
+  }
+
+  public void tickComplete() {
+    pastSlotSwitch++;
+    pastHotBarSlotChange++;
+    pastItemUsageTransition++;
+
+    if (handActive()) {
+      handActiveTicks++;
+      pastHandActiveTicks = 0;
+    } else {
+      pastHandActiveTicks++;
+      handActiveTicks = 0;
+    }
   }
 
   private static final Material CROSSBOW = MaterialSearch.materialThatIsNamed("CROSSBOW");

@@ -2,7 +2,7 @@ package de.jpx3.intave.adapter;
 
 import com.comphenix.protocol.events.PacketContainer;
 import com.comphenix.protocol.events.PacketEvent;
-import com.comphenix.protocol.utility.MinecraftVersion;
+import com.comphenix.protocol.utility.MinecraftReflection;
 import com.comphenix.protocol.wrappers.EnumWrappers;
 import de.jpx3.intave.IntaveLogger;
 import de.jpx3.intave.access.InvalidDependencyException;
@@ -15,7 +15,7 @@ public final class ProtocolLibraryAdapter {
 
   @Deprecated
   public static MinecraftVersion serverVersion() {
-    return MinecraftVersion.getCurrentVersion();
+    return MinecraftVersion.current();
   }
 
   public static boolean protocolLibAvailable() {
@@ -29,6 +29,12 @@ public final class ProtocolLibraryAdapter {
 
     if (!specifiedEnumModifier) {
       throw new InvalidDependencyException(PROTOCOLLIB_OUTDATED + " (missing generic enum conversion)");
+    }
+
+    try {
+      Class<?> minecraftKeyClass = MinecraftReflection.getMinecraftKeyClass();
+    } catch (Throwable throwable) {
+      throw new InvalidDependencyException(PROTOCOLLIB_OUTDATED + " (missing MinecraftKey class reference)");
     }
 
     if (!methodExists(MinecraftVersion.class.getName(), "atOrAbove")) {

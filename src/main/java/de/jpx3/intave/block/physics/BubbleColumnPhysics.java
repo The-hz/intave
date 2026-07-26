@@ -1,8 +1,20 @@
+/*
+ * Copyright 2026 Intave
+ *
+ * This software is licensed under the PolyForm Perimeter License 1.0.0.
+ * You may use this software for any purpose, except for providing to
+ * others any product that competes with the software.
+ *
+ * A copy of the license is available at:
+ *   https://polyformproject.org/licenses/perimeter/1.0.0/
+ */
+
 package de.jpx3.intave.block.physics;
 
-import com.comphenix.protocol.utility.MinecraftVersion;
+import de.jpx3.intave.adapter.MinecraftVersion;
 import de.jpx3.intave.block.access.VolatileBlockAccess;
 import de.jpx3.intave.block.variant.BlockVariant;
+import de.jpx3.intave.check.movement.physics.environment.SimulationEnvironment;
 import de.jpx3.intave.share.Motion;
 import de.jpx3.intave.user.User;
 import de.jpx3.intave.user.meta.MovementMetadata;
@@ -27,9 +39,9 @@ final class BubbleColumnPhysics implements BlockPhysic {
   }
 
   @Override
-  public Motion entityCollidedWithBlock(User user, Location location, Location from, double motionX, double motionY, double motionZ) {
+  public Motion entityInside(User user, SimulationEnvironment environment, Location location, Location from, double motionX, double motionY, double motionZ) {
     ProtocolMetadata protocol = user.meta().protocol();
-    if (protocol.waterUpdate()) {
+    if (protocol.aquaticUpdate()) {
       boolean water = VolatileBlockAccess.fluidAccess(user, location.clone().add(0, 1, 0)).isOfWater();
       BlockVariant variant = VolatileBlockAccess.variantAccess(user, location);
       boolean downwards = variant.propertyOf("drag");
@@ -59,7 +71,7 @@ final class BubbleColumnPhysics implements BlockPhysic {
     } else {
       motionY = Math.min(1.8D, motionY + 0.1D);
     }
-    return new Motion(motionX, motionY, motionZ);
+	  return new Motion(motionX, motionY, motionZ);
   }
 
   @Override

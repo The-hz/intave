@@ -2,7 +2,6 @@ package de.jpx3.intave.command.stages;
 
 import de.jpx3.intave.IntavePlugin;
 import de.jpx3.intave.command.CommandStage;
-import de.jpx3.intave.command.Forward;
 import de.jpx3.intave.command.SubCommand;
 import de.jpx3.intave.executor.Synchronizer;
 import de.jpx3.intave.module.Modules;
@@ -35,18 +34,6 @@ public final class InternalsStage extends CommandStage {
   public void internalCommand(CommandSender commandSender, String[] message) {
     String fullMessage = Arrays.stream(message).map(s -> s + " ").collect(Collectors.joining()).trim();
     Modules.violationProcessor().broadcastNotify(fullMessage);
-  }
-
-  @SubCommand(
-    selectors = "bot",
-    usage = "<player> <type>",
-    description = "Bot related commands",
-    permission = "intave.command.internals.bot"
-  )
-  @Forward(
-    target = BotStage.class
-  )
-  public void botCommand(CommandSender commandSender) {
   }
 
 //  @SubCommand(

@@ -1,3 +1,14 @@
+/*
+ * Copyright 2026 Intave
+ *
+ * This software is licensed under the PolyForm Perimeter License 1.0.0.
+ * You may use this software for any purpose, except for providing to
+ * others any product that competes with the software.
+ *
+ * A copy of the license is available at:
+ *   https://polyformproject.org/licenses/perimeter/1.0.0/
+ */
+
 package de.jpx3.intave;
 
 import de.jpx3.intave.access.IntaveAccess;
@@ -15,7 +26,7 @@ import de.jpx3.intave.block.access.VolatileBlockAccess;
 import de.jpx3.intave.block.collision.modifier.CollisionModifiers;
 import de.jpx3.intave.block.fluid.Fluids;
 import de.jpx3.intave.block.physics.BlockPhysics;
-import de.jpx3.intave.block.physics.BlockProperties;
+import de.jpx3.intave.block.shape.resolve.DrillResolver;
 import de.jpx3.intave.block.shape.resolve.patch.BlockShapePatcher;
 import de.jpx3.intave.block.type.BlockTypeAccess;
 import de.jpx3.intave.block.variant.BlockVariantNativeAccess;
@@ -63,7 +74,7 @@ import de.jpx3.intave.resource.legacy.EncryptedLegacyResource;
 import de.jpx3.intave.security.PlayerListService;
 import de.jpx3.intave.share.FriendlyByteBuf;
 import de.jpx3.intave.share.link.WrapperConverter;
-import de.jpx3.intave.test.TestService;
+import de.jpx3.intave.test.IntegrationTestService;
 import de.jpx3.intave.trustfactor.TrustFactorService;
 import de.jpx3.intave.user.UserRepository;
 import de.jpx3.intave.user.storage.LongTermViolationStorage;
@@ -71,10 +82,8 @@ import de.jpx3.intave.version.DurationTranslator;
 import de.jpx3.intave.version.IntaveVersion;
 import de.jpx3.intave.version.IntaveVersionList;
 import de.jpx3.intave.version.JavaVersion;
-import de.jpx3.intave.world.border.WorldBorders;
 import de.jpx3.intave.world.chunk.ChunkProviderServerAccess;
 import de.jpx3.intave.world.permission.WorldPermission;
-import de.jpx3.intave.world.raytrace.Raytracing;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.configuration.file.YamlConfiguration;
@@ -130,7 +139,7 @@ public final class IntavePlugin extends JavaPlugin {
   private ScheduledUploadService uploadService; // module candidate
   private Analytics analytics; // module candidate
   private Metrics metrics;
-  private TestService testService;
+  private IntegrationTestService integrationTestService;
 
   public IntavePlugin() {
     // stage 2
@@ -180,19 +189,11 @@ public final class IntavePlugin extends JavaPlugin {
       logger.info("Using agent :{~-~}:");
     }
 
+    DrillResolver.serverInit();
+
     IntaveDomains.setup();
 
     prefix = ChatColor.translateAlternateColorCodes('&', prefix);
-
-    try {
-      SecurityManager securityManager = System.getSecurityManager();
-      if (securityManager != null) {
-        logger.error("A security manager of class " + securityManager.getClass().getName() + " is present, unable to start");
-        bootFailure("Internal failure");
-        return;
-      }
-    } catch (Exception e) {
-    }
 
     try {
       // We need to put this here before setting up the Synchronizer
@@ -280,7 +281,6 @@ public final class IntavePlugin extends JavaPlugin {
 
 //      PacketReaders.setup();
       BlockWrapper.setup();
-      WorldBorders.setup();
 //      ShapeResolver.setup();
 
       // stage 7
@@ -290,7 +290,6 @@ public final class IntavePlugin extends JavaPlugin {
       HitboxSizeAccess.setup();
       UserRepository.setup();
       WrapperConverter.setup();
-      Raytracing.setup();
       Fluids.setup();
 
       VolatileBlockAccess.setup();
@@ -302,7 +301,6 @@ public final class IntavePlugin extends JavaPlugin {
       ViaVersionAdapter.setup();
       WorldPermission.setup();
       BlockPhysics.setup();
-      BlockProperties.setup();
       ItemProperties.setup();
       BlockShapePatcher.setup();
       EntityLookup.setup();
@@ -339,8 +337,8 @@ public final class IntavePlugin extends JavaPlugin {
       fakePlayerEventService = new FakePlayerEventService(this);
       proxyMessenger = new ProxyMessenger(this);
       sibylIntegrationService = new SibylIntegrationService(this);
-      testService = new TestService();
-      testService.scheduleTestsForFifthTick();
+      integrationTestService = new IntegrationTestService();
+      integrationTestService.setup();
       uploadService = new ScheduledUploadService();
       uploadService.enable();
 
@@ -474,7 +472,7 @@ public final class IntavePlugin extends JavaPlugin {
   }
 
   public void displayVersionInformation() {
-    IntaveVersion version = versions.versionInformation(version());
+    IntaveVersion version = versions.versionInformation(fullVersion());
     if (version == null) {
       logger().info(ChatColor.YELLOW + "This version of Intave is not listed in the official version index");
     } else {
@@ -742,8 +740,26 @@ public final class IntavePlugin extends JavaPlugin {
     return versions;
   }
 
-  public static String version() {
+  public static String fullVersion() {
     return version;
+  }
+
+  public static String versionTag() {
+    String version = fullVersion();
+    int lastPlusIndex = version.lastIndexOf('-');
+    if (lastPlusIndex != -1) {
+      return version.substring(0, lastPlusIndex);
+    }
+    return version;
+  }
+
+  public static String commitHash() {
+    String version = fullVersion();
+    int lastPlusIndex = version.lastIndexOf('-');
+    if (lastPlusIndex != -1 && lastPlusIndex < version.length() - 1) {
+      return version.substring(lastPlusIndex + 1);
+    }
+    return "unknown";
   }
 
   public static UUID gameId() {

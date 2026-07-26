@@ -2,15 +2,15 @@ package de.jpx3.intave.packet.reader;
 
 import com.comphenix.protocol.PacketType;
 import com.comphenix.protocol.events.PacketContainer;
+import de.jpx3.intave.test.IntegrationTests;
 import de.jpx3.intave.test.Severity;
 import de.jpx3.intave.test.Test;
-import de.jpx3.intave.test.Tests;
 
 import java.lang.reflect.Method;
 import java.util.HashSet;
 import java.util.Set;
 
-public final class ReaderTests extends Tests {
+public final class ReaderTests extends IntegrationTests {
   private static final Set<PacketType> EXCLUDED_TYPES = new HashSet<>();
   static {
     EXCLUDED_TYPES.add(PacketType.Play.Server.MULTI_BLOCK_CHANGE);
@@ -27,8 +27,14 @@ public final class ReaderTests extends Tests {
   public void testAllPlayerInfoReaders() {
     for (PacketType value : PacketType.values()) {
       if (PacketReaders.hasReader(value) && !EXCLUDED_TYPES.contains(value)) {
-        PacketContainer packet = new PacketContainer(value);
-        PacketReader reader = PacketReaders.readerOf(packet);
+        PacketContainer packet;
+	      try {
+          packet = new PacketContainer(value);
+        } catch (Throwable exception) {
+          exception.printStackTrace();
+          throw new IllegalStateException("Failed to create packet container for " + value);
+        }
+	      PacketReader reader = PacketReaders.readerOf(packet);
         Method[] declaredMethods;
         try {
           declaredMethods = reader.getClass().getDeclaredMethods();

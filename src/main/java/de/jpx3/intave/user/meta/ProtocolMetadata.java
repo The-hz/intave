@@ -1,6 +1,17 @@
+/*
+ * Copyright 2026 Intave
+ *
+ * This software is licensed under the PolyForm Perimeter License 1.0.0.
+ * You may use this software for any purpose, except for providing to
+ * others any product that competes with the software.
+ *
+ * A copy of the license is available at:
+ *   https://polyformproject.org/licenses/perimeter/1.0.0/
+ */
+
 package de.jpx3.intave.user.meta;
 
-import com.comphenix.protocol.utility.MinecraftVersion;
+import de.jpx3.intave.adapter.MinecraftVersion;
 import de.jpx3.intave.adapter.MinecraftVersions;
 import de.jpx3.intave.adapter.ViaVersionAdapter;
 import de.jpx3.intave.share.Position;
@@ -11,13 +22,16 @@ import org.bukkit.entity.Player;
 import java.util.*;
 
 public final class ProtocolMetadata {
+  public static int VER_26_1_1 = 775; // 26.1.1
+  public static int VER_1_21_5 = 770; // 1.21.5
   public static int VER_1_21_3 = 768; // 1.21.3
   public static int VER_1_21 = 767; // 1.21
   // final has been removed to disguise modified integer VERSION_DETAILS
   public static int VER_1_20_2 = 764; // 1.21.2
   public static int VER_1_20 = 763; // 1.17
-  public static int VER_1_19_4 = 756; // 1.19.4
-  public static int VER_1_19_2 = 754; // 1.19.2
+  public static int VER_1_19_4 = 762; // 1.19.4
+  public static int VER_1_19_2 = 760; // 1.19.2
+  public static int VER_1_18_2 = 758; // 1.18.2
   public static int VER_1_17 = 755; // 1.17
   public static int VER_1_16 = 735; // 1.16
   public static int VER_1_15 = 573; // 1.15
@@ -78,7 +92,7 @@ public final class ProtocolMetadata {
       minecraftVersion = MinecraftVersions.VER1_19_1;
     } else {
       minecraftVersion = new MinecraftVersion(versionString);
-      MinecraftVersion server = MinecraftVersion.getCurrentVersion();
+      MinecraftVersion server = MinecraftVersion.current();
       MinecraftVersion client = new MinecraftVersion(versionString);
       behind = !client.isAtLeast(server);
     }
@@ -119,7 +133,7 @@ public final class ProtocolMetadata {
 
   private static final boolean SERVER_DROPPED_FLYING_PACKETS = MinecraftVersions.VER1_9_0.atOrAbove();
 
-  public boolean flyingPacketsAreSent() {
+  public boolean emptyFlyingPacketsAreExplicitlySent() {
     // flying packets are guaranteed in 1.8 and below, removed in 1.9
     // but if the server is 1.9+, via version/backwards will drop them even for 1.8 clients
     return protocolVersion <= VER_1_8 && !SERVER_DROPPED_FLYING_PACKETS;
@@ -157,7 +171,7 @@ public final class ProtocolMetadata {
     return protocolVersion < VER_1_14;
   }
 
-  public boolean sprintWhenSneaking() {
+  public boolean canSprintWhileSneaking() {
     return protocolVersion >= VER_1_14;
   }
 
@@ -185,6 +199,14 @@ public final class ProtocolMetadata {
     return protocolVersion >= VER_1_17;
   }
 
+  public boolean useItemMovementPacket() {
+    return protocolVersion >= VER_1_17 && protocolVersion <= VER_1_21_5;
+  }
+
+  public boolean maskedMotionPossible() {
+    return protocolVersion >= VER_1_14 && protocolVersion <= VER_1_17;
+  }
+
   public boolean beeUpdate() {
     return protocolVersion >= VER_1_15;
   }
@@ -193,7 +215,7 @@ public final class ProtocolMetadata {
     return protocolVersion <= VER_1_11_1;
   }
 
-  public boolean waterUpdate() {
+  public boolean aquaticUpdate() {
     return protocolVersion >= VER_1_13;
   }
 
@@ -217,6 +239,22 @@ public final class ProtocolMetadata {
     return protocolVersion >= VER_1_19_4;
   }
 
+  public double flyingPacketUncertaintyRadius() {
+    if (protocolVersion >= VER_1_18_2) {
+      return 0.0002 * 0.0002;
+    } else {
+      return 0.03;
+    }
+  }
+
+	public boolean newMotionClampLogic() {
+		return protocolVersion >= VER_1_21_5;
+	}
+
+  public boolean newBlockEntityIntersectionLogic() {
+    return protocolVersion >= VER_1_21_5;
+  }
+
   public boolean oppositeBlockVectorBehavior() {
     return protocolVersion >= VER_1_14;
   }
@@ -225,8 +263,16 @@ public final class ProtocolMetadata {
     return protocolVersion <= VER_1_17 && MinecraftVersions.VER1_17_0.atOrAbove();
   }
 
+  public boolean sneakAsVehicleSteer() {
+    return MinecraftVersions.VER1_21.atOrAbove();
+  }
+
   public boolean sendsClientTickEnd() {
     return protocolVersion >= VER_1_20_2 && MinecraftVersions.VER1_20_2.atOrAbove();
+  }
+
+  public boolean sendsInputs() {
+    return protocolVersion >= VER_1_21_3;
   }
 
   public void setLocale(String locale) {
@@ -241,7 +287,7 @@ public final class ProtocolMetadata {
 
   public boolean outdatedClient() {
     if (behind == null || refreshes < 2) {
-      MinecraftVersion server = MinecraftVersion.getCurrentVersion();
+      MinecraftVersion server = MinecraftVersion.current();
       MinecraftVersion client;
       try {
         client = new MinecraftVersion(versionAsString(protocolVersion));
@@ -261,7 +307,13 @@ public final class ProtocolMetadata {
     return minecraftVersion;
   }
 
+  public boolean swordBlockingPossible() {
+    return protocolVersion < VER_1_9 || (
+      protocolVersion >= VER_1_21_5 && !MinecraftVersions.VER1_9_0.atOrAbove()
+    );
+  }
+
   public boolean viaVersionShieldBlockReplacement() {
-    return protocolVersion >= VER_1_9 && !MinecraftVersions.VER1_9_0.atOrAbove();
+    return protocolVersion >= VER_1_9 && protocolVersion < VER_1_21_5 && !MinecraftVersions.VER1_9_0.atOrAbove();
   }
 }

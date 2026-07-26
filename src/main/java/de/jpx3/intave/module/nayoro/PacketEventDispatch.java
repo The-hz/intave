@@ -1,3 +1,14 @@
+/*
+ * Copyright 2026 Intave
+ *
+ * This software is licensed under the PolyForm Perimeter License 1.0.0.
+ * You may use this software for any purpose, except for providing to
+ * others any product that competes with the software.
+ *
+ * A copy of the license is available at:
+ *   https://polyformproject.org/licenses/perimeter/1.0.0/
+ */
+
 package de.jpx3.intave.module.nayoro;
 
 import com.comphenix.protocol.events.PacketContainer;
@@ -20,10 +31,11 @@ import org.bukkit.inventory.ItemStack;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
+import static de.jpx3.intave.check.movement.physics.environment.MoveMetric.TELEPORT;
 import static de.jpx3.intave.module.linker.packet.ListenerPriority.LOWEST;
+import static de.jpx3.intave.module.linker.packet.PacketId.Client.*;
 import static de.jpx3.intave.module.linker.packet.PacketId.Client.POSITION;
 import static de.jpx3.intave.module.linker.packet.PacketId.Client.VEHICLE_MOVE;
-import static de.jpx3.intave.module.linker.packet.PacketId.Client.*;
 import static de.jpx3.intave.module.linker.packet.PacketId.Server.*;
 import static de.jpx3.intave.module.nayoro.event.WindowActionEvent.Action.CLOSE;
 import static de.jpx3.intave.module.nayoro.event.WindowActionEvent.Action.INFER_OPEN;
@@ -50,22 +62,22 @@ public final class PacketEventDispatch implements PacketEventSubscriber {
   @PacketSubscription(
     priority = LOWEST,
     packetsIn = {
-      USE_ENTITY
+      ATTACK_ENTITY, USE_ENTITY
     }
   )
   public void onUse(PacketEvent event) {
     Player player = event.getPlayer();
     User user = UserRepository.userOf(player);
     PacketContainer packet = event.getPacket();
-    EntityUseReader packetReader = PacketReaders.readerOf(packet);
-    EnumWrappers.EntityUseAction useAction = packetReader.useAction();
+    EntityUseReader reader = PacketReaders.readerOf(packet);
+    EnumWrappers.EntityUseAction useAction = reader.useAction();
     if (useAction == EnumWrappers.EntityUseAction.ATTACK) {
       int attackerId = player.getEntityId();
-      int targetId = packetReader.entityId();
+      int targetId = reader.entityId();
       AttackEvent attackEvent = AttackEvent.create(attackerId, targetId);
       reverseSink.accept(user, attackEvent::accept);
     }
-    packetReader.release();
+    reader.release();
   }
 
   @PacketSubscription(
@@ -93,12 +105,12 @@ public final class PacketEventDispatch implements PacketEventSubscriber {
 
     boolean collidedHorizontally = movement.collidedHorizontally;
     boolean collidedVertically = movement.collidedVertically || movement.onGround();
-    boolean inWater = movement.inWater;
+    boolean inWater = movement.inWater();
     boolean inLava = movement.inLava();
 
     boolean inVehicle = movement.isInVehicle();
     boolean sneaking = movement.isSneaking();
-    boolean recentlyTeleported = movement.lastTeleport <= 3;
+    boolean recentlyTeleported = movement.ticksPast(TELEPORT) <= 3;
     boolean jumped = movement.physicsJumped;
 
     int movementFlags = 0;
@@ -165,7 +177,7 @@ public final class PacketEventDispatch implements PacketEventSubscriber {
       reverseSink.accept(user, openEvent::accept);
     }
     WindowClickEvent clickEvent = WindowClickEvent.create(
-      reader.container(), reader.slot(), reader.clickType().ordinal(), reader.button(), reader.actionNumber()
+      reader.containerId(), reader.slot(), reader.clickType().ordinal(), reader.button(), reader.actionNumber()
     );
     reverseSink.accept(user, clickEvent::accept);
   }

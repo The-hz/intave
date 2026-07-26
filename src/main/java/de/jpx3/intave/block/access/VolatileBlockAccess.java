@@ -1,3 +1,14 @@
+/*
+ * Copyright 2026 Intave
+ *
+ * This software is licensed under the PolyForm Perimeter License 1.0.0.
+ * You may use this software for any purpose, except for providing to
+ * others any product that competes with the software.
+ *
+ * A copy of the license is available at:
+ *   https://polyformproject.org/licenses/perimeter/1.0.0/
+ */
+
 package de.jpx3.intave.block.access;
 
 import de.jpx3.intave.block.fluid.Fluid;
@@ -7,6 +18,8 @@ import de.jpx3.intave.block.variant.BlockVariant;
 import de.jpx3.intave.block.variant.BlockVariantRegister;
 import de.jpx3.intave.cleanup.GarbageCollector;
 import de.jpx3.intave.share.BlockPosition;
+import de.jpx3.intave.share.ClientMath;
+import de.jpx3.intave.share.MutableBlockPosition;
 import de.jpx3.intave.share.Position;
 import de.jpx3.intave.user.User;
 import org.bukkit.Bukkit;
@@ -16,6 +29,7 @@ import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 import org.bukkit.metadata.MetadataValue;
+import org.jetbrains.annotations.NotNull;
 
 import java.util.HashMap;
 import java.util.List;
@@ -91,7 +105,7 @@ public final class VolatileBlockAccess {
   }
 
   public static Block blockAccess(World blockAccess, BlockPosition position) {
-    return blockAccess(blockAccess, position.xCoord, position.yCoord, position.zCoord);
+    return blockAccess(blockAccess, position.x(), position.y(), position.z());
   }
 
   public static Block blockAccess(World blockAccess, double x, double y, double z) {
@@ -138,6 +152,10 @@ public final class VolatileBlockAccess {
     return fluidAccess(user, user.player().getWorld(), position.getBlockX(), position.getBlockY(), position.getBlockZ());
   }
 
+  public static Fluid fluidAccess(User user, MutableBlockPosition position) {
+    return fluidAccess(user, user.player().getWorld(), position.x(), position.y(), position.z());
+  }
+
   public static Fluid fluidAccess(User user, World blockAccess, double x, double y, double z) {
     return fluidAccess(user, blockAccess, floor(x), floor(y), floor(z));
   }
@@ -168,6 +186,14 @@ public final class VolatileBlockAccess {
     return typeAccess(user, user.player().getWorld(), position.getBlockX(), position.getBlockY(), position.getBlockZ());
   }
 
+  public static Material typeAccess(User user, MutableBlockPosition position) {
+    return typeAccess(user, user.player().getWorld(), position.x(), position.y(), position.z());
+  }
+
+  public static Material typeAccess(User user, Position position) {
+    return typeAccess(user, user.player().getWorld(), position.getBlockX(), position.getBlockY(), position.getBlockZ());
+  }
+
   public static Material typeAccess(User user, World world, Position position) {
     return typeAccess(user, world, position.getBlockX(), position.getBlockY(), position.getBlockZ());
   }
@@ -177,12 +203,16 @@ public final class VolatileBlockAccess {
     return typeAccess(user, world, blockX, blockY, blockZ);
   }
 
+  public static Material typeAccess(User user, double x, double y, double z) {
+    return typeAccess(user, user.player().getWorld(), floor(x), floor(y), floor(z));
+  }
+
   public static Material typeAccess(User user, World blockAccess, double x, double y, double z) {
     return typeAccess(user, blockAccess, floor(x), floor(y), floor(z));
   }
 
-  public static Material typeAccess(User user, World blockAccess, int blockX, int blockY, int blockZ) {
-    if (blockAccess == null || isInLoadedChunk(blockAccess, blockX, blockZ) || Bukkit.isPrimaryThread()) {
+  public static @NotNull Material typeAccess(User user, World blockAccess, int blockX, int blockY, int blockZ) {
+    if (isInLoadedChunk(blockAccess, blockX, blockZ) || Bukkit.isPrimaryThread()) {
       return user.blockCache().typeAt(blockX, blockY, blockZ);
     }
     return Material.AIR;
@@ -238,7 +268,11 @@ public final class VolatileBlockAccess {
   }
 
   public static BlockShape collisionShapeAccess(User user, BlockPosition position) {
-    return collisionShapeAccess(user, position.xCoord, position.yCoord, position.zCoord);
+    return collisionShapeAccess(user, position.getX(), position.getY(), position.getZ());
+  }
+
+  public static BlockShape collisionShapeAccess(User user, MutableBlockPosition position) {
+    return collisionShapeAccess(user, position.x(), position.y(), position.z());
   }
 
   public static BlockShape collisionShapeAccess(User user, double x, double y, double z) {
@@ -250,14 +284,12 @@ public final class VolatileBlockAccess {
   }
 
   private static int floor(double value) {
-    int i = (int) value;
-    return value < (double) i ? i - 1 : i;
+	  return ClientMath.floor(value);
   }
 
   public static boolean isInLoadedChunk(World world, int x, int z) {
     int chunkX = x >> 4;
     int chunkZ = z >> 4;
-    return world.isChunkLoaded(chunkX, chunkZ) &&
-      world.isChunkInUse(chunkX, chunkZ);
+    return world.isChunkLoaded(chunkX, chunkZ);
   }
 }

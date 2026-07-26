@@ -1,3 +1,14 @@
+/*
+ * Copyright 2026 Intave
+ *
+ * This software is licensed under the PolyForm Perimeter License 1.0.0.
+ * You may use this software for any purpose, except for providing to
+ * others any product that competes with the software.
+ *
+ * A copy of the license is available at:
+ *   https://polyformproject.org/licenses/perimeter/1.0.0/
+ */
+
 package de.jpx3.intave.block.shape.resolve;
 
 import de.jpx3.intave.IntavePlugin;
@@ -9,10 +20,10 @@ import de.jpx3.intave.klass.rewrite.PatchyLoadingInjector;
 import static de.jpx3.intave.adapter.MinecraftVersions.VER1_13_0;
 import static de.jpx3.intave.adapter.MinecraftVersions.VER1_9_0;
 
-final class DrillResolver {
-  private static final ShapeResolverPipeline drill;
+public final class DrillResolver {
+  private static ShapeResolverPipeline drill = DenyShapeResolverPipeline.create();
 
-  static {
+  public static void serverInit() {
 //    PatchyClassSwitchLoader<?> acbbResolver = PatchyClassSwitchLoader
 //      .builderFor("de.jpx3.intave.block.shape.drill.acbbs.v{ver}AlwaysCollidingBoundingBox")
 //      .withVersions(VER1_8_0, VER1_9_0, VER1_12_0)
@@ -53,6 +64,10 @@ final class DrillResolver {
 
     // server resolver
     drill = instanceOf(drillClassName);
+  }
+
+  public static void manualInit(ShapeResolverPipeline drill) {
+    DrillResolver.drill = drill;
   }
 
   public static ShapeResolverPipeline selectedDrill() {

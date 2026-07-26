@@ -1,6 +1,6 @@
 package de.jpx3.intave.klass.locate;
 
-import com.comphenix.protocol.utility.MinecraftVersion;
+import de.jpx3.intave.adapter.MinecraftVersion;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.Collections;
@@ -30,13 +30,7 @@ final class MethodLocations implements Iterable<MethodLocation> {
   }
 
   public MethodLocations reduceToCurrentVersion() {
-    int currentMinecraftVersion = currentMinecraftVersion();
-    return filter(methodLocation -> methodLocation.versionMatcher().matches(currentMinecraftVersion));
-  }
-
-  private int currentMinecraftVersion() {
-    MinecraftVersion version = MinecraftVersion.getCurrentVersion();
-    return version.getMinor() * 10 + version.getBuild();
+    return filter(methodLocation -> methodLocation.matchesVersion(MinecraftVersion.current()));
   }
 
   public Optional<MethodLocation> findAny() {

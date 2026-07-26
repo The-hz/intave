@@ -3,11 +3,9 @@ package de.jpx3.intave.resource;
 import de.jpx3.intave.IntavePlugin;
 import de.jpx3.intave.connect.IntaveDomains;
 import de.jpx3.intave.library.asm.ByteVector;
-import de.jpx3.intave.security.HashAccess;
 
 import java.io.*;
 import java.net.MalformedURLException;
-import java.net.URISyntaxException;
 import java.net.URL;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -17,7 +15,6 @@ import java.util.Random;
 import java.util.UUID;
 import java.util.function.Function;
 
-import static de.jpx3.intave.IntaveControl.DISABLE_LICENSE_CHECK;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 public final class Resources {
@@ -34,7 +31,17 @@ public final class Resources {
   }
 
   public static Resource resourceFromJarOrBuild(String path) {
-    return resourceFromJarWithFallback(path, resourceFromFile(new File("src/main/java/resources/" + path)));
+    if (path.startsWith("/")) {
+      throw new IllegalArgumentException("Path must not start with a slash");
+    }
+    return resourceFromJarWithFallback(path, resourceFromFile(new File("src/main/resources/" + path)));
+  }
+
+  public static Resource resourceFromJarOrTestBuild(String path) {
+    if (path.startsWith("/")) {
+      throw new IllegalArgumentException("Path must not start with a slash");
+    }
+    return resourceFromJarWithFallback(path, resourceFromFile(new File("src/test/resources/" + path)));
   }
 
   public static Resource hashProtected(String path, Resource target) {
@@ -173,9 +180,9 @@ public final class Resources {
       lastInt = Math.abs(random.nextInt(Math.abs(url.hashCode() ^ lastInt) + 1)) + 1;
     }
     random.nextInt(Math.abs(lastInt) + 1);
-    random.nextInt(IntavePlugin.version().hashCode());
+    random.nextInt(Math.abs(IntavePlugin.fullVersion().hashCode()) + 1);
     long mostSigBits = ((long) Math.abs(identifier.hashCode()) ^ Math.abs(random.nextInt(Byte.MAX_VALUE))) | versionResourceKey();
-    long leastSigBits = ((long) Math.abs(IntavePlugin.version().hashCode()) ^ Math.abs(random.nextInt(Short.MAX_VALUE))) << 32 | random.nextInt();
+    long leastSigBits = ((long) Math.abs(IntavePlugin.fullVersion().hashCode()) ^ Math.abs(random.nextInt(Short.MAX_VALUE))) << 32 | random.nextInt();
     UUID uuid = new UUID(mostSigBits, leastSigBits);
     return uuid.toString().replace("-", "")
       .replace("f", "r")
@@ -186,19 +193,6 @@ public final class Resources {
   private static int fileHashCode = 0;
 
   private static long versionResourceKey() {
-    if ((!DISABLE_LICENSE_CHECK) && fileHashCode == 0) {
-      try {
-        File currentJarFile = new File(IntavePlugin.class.getProtectionDomain().getCodeSource().getLocation().toURI());
-        fileHashCode = Math.abs(HashAccess.hashOf(currentJarFile).hashCode());
-        if (fileHashCode == 0) {
-          fileHashCode = 1;
-        }
-      } catch (URISyntaxException exception) {
-        exception.printStackTrace();
-        fileHashCode = -1;
-      }
-    }
-
     long quarterYearsSinceEpoch = ByteVector.startTime / (1000L * 60 * 60 * 24 * 365 / 4);
     String asString = String.valueOf(quarterYearsSinceEpoch);
     Random random = new Random(quarterYearsSinceEpoch);

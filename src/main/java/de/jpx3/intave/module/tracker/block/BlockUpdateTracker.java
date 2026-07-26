@@ -1,3 +1,14 @@
+/*
+ * Copyright 2026 Intave
+ *
+ * This software is licensed under the PolyForm Perimeter License 1.0.0.
+ * You may use this software for any purpose, except for providing to
+ * others any product that competes with the software.
+ *
+ * A copy of the license is available at:
+ *   https://polyformproject.org/licenses/perimeter/1.0.0/
+ */
+
 package de.jpx3.intave.module.tracker.block;
 
 import com.comphenix.protocol.PacketType;
@@ -8,6 +19,7 @@ import com.comphenix.protocol.wrappers.EnumWrappers;
 import com.comphenix.protocol.wrappers.WrappedBlockData;
 import de.jpx3.intave.block.cache.BlockCache;
 import de.jpx3.intave.block.variant.BlockVariantNativeAccess;
+import de.jpx3.intave.check.movement.physics.environment.SimulationEnvironment;
 import de.jpx3.intave.module.Module;
 import de.jpx3.intave.module.feedback.EmptyFeedbackCallback;
 import de.jpx3.intave.module.feedback.PendingCountingFeedbackObserver;
@@ -18,7 +30,6 @@ import de.jpx3.intave.packet.reader.*;
 import de.jpx3.intave.share.Position;
 import de.jpx3.intave.user.User;
 import de.jpx3.intave.user.UserRepository;
-import de.jpx3.intave.user.meta.MovementMetadata;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
@@ -31,13 +42,14 @@ import java.util.Collection;
 import java.util.List;
 
 import static com.comphenix.protocol.wrappers.EnumWrappers.PlayerDigType.*;
+import static de.jpx3.intave.check.movement.physics.environment.MoveMetric.NEARBY_COLLISION_INACCURACY;
 import static de.jpx3.intave.module.feedback.FeedbackOptions.*;
 import static de.jpx3.intave.module.linker.packet.PacketId.Client.*;
 import static de.jpx3.intave.module.linker.packet.PacketId.Server.*;
 
 public final class BlockUpdateTracker extends Module {
   @PacketSubscription(
-    engine = Engine.ASYNC_INTERNAL,
+    engine = Engine.INTERNAL,
     packetsOut = {
       MAP_CHUNK, MAP_CHUNK_BULK
     }
@@ -110,13 +122,13 @@ public final class BlockUpdateTracker extends Module {
     }
 
     if (check) {
-      MovementMetadata movementData = user.meta().movement();
+      SimulationEnvironment movementData = user.meta().movement();
       BlockPosition blockPosition = reader.blockPosition();
       if (blockPosition == null) {
         return;
       }
       Vector targetBlock = blockPosition.toVector();
-      Vector playerLocation = new Vector(movementData.lastPositionX, movementData.lastPositionY, movementData.lastPositionZ);
+      Vector playerLocation = new Vector(movementData.lastPositionX(), movementData.lastPositionY(), movementData.lastPositionZ());
       if (playerLocation.distance(targetBlock) > 16) {
         cancellable.setCancelled(true);
       }
@@ -149,7 +161,7 @@ public final class BlockUpdateTracker extends Module {
         BlockPosition blockPosition = blockPositions.get(i);
         WrappedBlockData blockData = blockDataList.get(i);
         if (distance(verifiedLocation, blockPosition) < 2) {
-          user.meta().movement().pastNearbyCollisionInaccuracy = 0;
+          user.meta().movement().activeTick(NEARBY_COLLISION_INACCURACY);
         }
         Material material = blockData.getType();
         int variant = BlockVariantNativeAccess.variantAccess(blockData);

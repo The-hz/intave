@@ -1,3 +1,14 @@
+/*
+ * Copyright 2026 Intave
+ *
+ * This software is licensed under the PolyForm Perimeter License 1.0.0.
+ * You may use this software for any purpose, except for providing to
+ * others any product that competes with the software.
+ *
+ * A copy of the license is available at:
+ *   https://polyformproject.org/licenses/perimeter/1.0.0/
+ */
+
 package de.jpx3.intave.block.shape.resolve.patch;
 
 import com.google.common.collect.Lists;
@@ -19,14 +30,14 @@ final class CauldronBlockPatch extends BlockShapePatch {
 
   static {
     float wallWidth = 2f /*/ 16f*/;
-    shape8 = BlockShapes.mergeBoxes(Lists.newArrayList(
+    shape8 = BlockShapes.optimizedMerge(Lists.newArrayList(
       BoundingBox.originFromX16(0.0f, 0.0F, 0.0F, 16.0F, 5.0f, 16.0F),
       BoundingBox.originFromX16(0.0F, 0.0F, 0.0F, wallWidth, 16.0F, 16.0F),
       BoundingBox.originFromX16(0.0F, 0.0F, 0.0F, 16.0F, 16.0F, wallWidth),
       BoundingBox.originFromX16(16.0F - wallWidth, 0.0F, 0.0F, 16.0F, 16.0F, 16.0F),
       BoundingBox.originFromX16(0.0F, 0.0F, 16.0F - wallWidth, 16.0F, 16.0F, 16.0F)
     ));
-    shape13 = BlockShapes.mergeBoxes(Lists.newArrayList(
+    shape13 = BlockShapes.optimizedMerge(Lists.newArrayList(
       BoundingBox.originFromX16(0.0F, 0.0F, 0.0F, 16.0F, 4.0f, 16.0F),
       BoundingBox.originFromX16(0.0F, 0.0F, 0.0F, wallWidth, 16.0F, 16.0F),
       BoundingBox.originFromX16(0.0F, 0.0F, 0.0F, 16.0F, 16.0F, wallWidth),
@@ -40,7 +51,7 @@ final class CauldronBlockPatch extends BlockShapePatch {
   @Override
   protected BlockShape collisionPatch(World world, Player player, int posX, int posY, int posZ, Material type, int blockState, BlockShape shape) {
     User user = UserRepository.userOf(player);
-    if (user.meta().protocol().waterUpdate()) {
+    if (user.meta().protocol().aquaticUpdate()) {
       if (SERVER_IS_1_13) {
         return shape;
       } else {

@@ -1,3 +1,14 @@
+/*
+ * Copyright 2026 Intave
+ *
+ * This software is licensed under the PolyForm Perimeter License 1.0.0.
+ * You may use this software for any purpose, except for providing to
+ * others any product that competes with the software.
+ *
+ * A copy of the license is available at:
+ *   https://polyformproject.org/licenses/perimeter/1.0.0/
+ */
+
 package de.jpx3.intave.block.fluid;
 
 import de.jpx3.intave.IntaveLogger;
@@ -8,27 +19,30 @@ import de.jpx3.intave.block.variant.BlockVariant;
 import de.jpx3.intave.block.variant.BlockVariantRegister;
 import de.jpx3.intave.klass.rewrite.PatchyLoadingInjector;
 import de.jpx3.intave.share.BlockPosition;
+import de.jpx3.intave.share.MutableBlockPosition;
 import de.jpx3.intave.share.Position;
 import de.jpx3.intave.user.User;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.stream.Collectors;
 
 import static de.jpx3.intave.adapter.MinecraftVersions.*;
 
-public class Fluids {
-  private static final Map<Material, Map<Integer, Fluid>> liquidData = new HashMap<>();
-  private static FluidResolver resolver;
-  private static FluidFlow v8Waterflow;
-  private static FluidFlow v13Waterflow;
+public final class Fluids {
+  private static final Map<Material, Map<Integer, Fluid>> liquidData = new EnumMap<>(Material.class);
+	private static final FluidFlow v8Waterflow = new v8Waterflow();
+  private static final FluidFlow v13Waterflow = new v13Waterflow();
 
   public static void setup() {
     String className;
-    if (VER1_18_2.atOrAbove()) {
+    if (VER26_1_1.atOrAbove()) {
+      className = "de.jpx3.intave.block.fluid.v26FluidResolver";
+    } else if (VER1_18_2.atOrAbove()) {
       className = "de.jpx3.intave.block.fluid.v18b2FluidResolver";
     } else if (VER1_16_0.atOrAbove()) {
       className = "de.jpx3.intave.block.fluid.v16FluidResolver";
@@ -44,14 +58,12 @@ public class Fluids {
       className = "de.jpx3.intave.block.fluid.v8FluidResolver";
     }
     PatchyLoadingInjector.loadUnloadedClassPatched(IntavePlugin.class.getClassLoader(), className);
-    try {
+	  FluidResolver resolver;
+	  try {
       resolver = (FluidResolver) Class.forName(className).newInstance();
     } catch (Exception exception) {
       throw new IntaveInternalException(exception);
     }
-
-    v8Waterflow = new v8Waterflow();
-    v13Waterflow = new v13Waterflow();
 
     for (Material value : Material.values()) {
       if (value.isBlock()) {
@@ -64,7 +76,7 @@ public class Fluids {
             anyLiquid |= !currentFluid.isDry();
           } catch (Exception exception) {
             BlockVariant properties = BlockVariantRegister.uncachedVariantOf(value, variantIndex);
-            String propertyString = "{"+properties.propertyNames().stream().map(s -> s + ": " + properties.propertyOf(s)).collect(Collectors.joining(", ")) +"}";
+            String propertyString = "{" + properties.propertyNames().stream().map(s -> s + ": " + properties.propertyOf(s)).collect(Collectors.joining(", ")) + "}";
             IntaveLogger.logger().error("Failed to index fluid " + value + ":" + variantIndex + " " + propertyString);
             exception.printStackTrace();
           }
@@ -76,8 +88,15 @@ public class Fluids {
     }
   }
 
+  public static void overrideFluids(
+    Map<Material, Map<Integer, Fluid>> newFluids
+  ) {
+    liquidData.clear();
+    liquidData.putAll(newFluids);
+  }
+
   public static FluidFlow suitableWaterflowFor(User user) {
-    return user.meta().protocol().waterUpdate() ? v13Waterflow : v8Waterflow;
+    return user.meta().protocol().aquaticUpdate() ? v13Waterflow : v8Waterflow;
   }
 
   public static FluidFlow anyWaterflow() {
@@ -155,6 +174,10 @@ public class Fluids {
 
   public static boolean fluidPresentAt(User user, BlockPosition position) {
     return fluidPresentAt(user, position.getX(), position.getY(), position.getZ());
+  }
+
+  public static boolean fluidPresentAt(User user, MutableBlockPosition position) {
+    return fluidPresentAt(user, position.x(), position.y(), position.z());
   }
 
   public static boolean fluidPresentAt(User user, double x, double y, double z) {

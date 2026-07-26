@@ -1,3 +1,14 @@
+/*
+ * Copyright 2026 Intave
+ *
+ * This software is licensed under the PolyForm Perimeter License 1.0.0.
+ * You may use this software for any purpose, except for providing to
+ * others any product that competes with the software.
+ *
+ * A copy of the license is available at:
+ *   https://polyformproject.org/licenses/perimeter/1.0.0/
+ */
+
 package de.jpx3.intave.user;
 
 import com.comphenix.protocol.PacketType;
@@ -14,7 +25,7 @@ import de.jpx3.intave.block.cache.BlockCaches;
 import de.jpx3.intave.block.fluid.FluidFlow;
 import de.jpx3.intave.block.fluid.Fluids;
 import de.jpx3.intave.block.type.BlockTypeAccess;
-import de.jpx3.intave.check.movement.physics.Pose;
+import de.jpx3.intave.check.movement.physics.environment.Pose;
 import de.jpx3.intave.cleanup.GarbageCollector;
 import de.jpx3.intave.connect.cloud.LogTransmittor;
 import de.jpx3.intave.connect.customclient.CustomClientSupportConfig;
@@ -444,11 +455,10 @@ final class PlayerUser implements User {
   @Override
   public HitboxSize sizeOf(Pose pose) {
     HitboxSize size = poseSizes.get(pose);
-    double scale = meta().abilities().attributeValue("generic.scale");
-    if (Double.isNaN(scale)) {
-      return size;
+    double scale = meta().abilities().scale();
+    if (!Double.isNaN(scale)) {
+      size = size.scaled(scale);
     }
-    size = size.scaled(scale);
     return size;
   }
 
@@ -547,6 +557,16 @@ final class PlayerUser implements User {
   @Override
   public void message(String key, Object... args) {
 
+  }
+
+  @Override
+  public void sendMessage(String message) {
+    Synchronizer.synchronize(() -> {
+      Player player = player();
+      if (player.isOnline()) {
+        player.sendMessage(message);
+      }
+    });
   }
 
   @Override

@@ -1,19 +1,51 @@
+/*
+ * Copyright 2026 Intave
+ *
+ * This software is licensed under the PolyForm Perimeter License 1.0.0.
+ * You may use this software for any purpose, except for providing to
+ * others any product that competes with the software.
+ *
+ * A copy of the license is available at:
+ *   https://polyformproject.org/licenses/perimeter/1.0.0/
+ */
+
 package de.jpx3.intave.block.shape;
 
+import de.jpx3.intave.codec.StreamCodec;
 import de.jpx3.intave.share.BoundingBox;
 import de.jpx3.intave.share.Direction;
 import de.jpx3.intave.share.Position;
+import io.netty.buffer.ByteBuf;
 import it.unimi.dsi.fastutil.doubles.DoubleSet;
 
 import java.util.List;
 
 public final class ComparisonAlertShape implements BlockShape {
+  public static final StreamCodec<ByteBuf, ByteBuf, ComparisonAlertShape> STREAM_CODEC = StreamCodec.of(
+    (output, shape) -> {
+      BlockShape.STREAM_CODEC.encode(output, shape.firstShape());
+      BlockShape.STREAM_CODEC.encode(output, shape.secondShape());
+    },
+    input -> new ComparisonAlertShape(
+      BlockShape.STREAM_CODEC.decode(input),
+      BlockShape.STREAM_CODEC.decode(input)
+    )
+  );
+
   private final BlockShape firstShape;
   private final BlockShape secondShape;
 
-  public ComparisonAlertShape(BlockShape firstShape, BlockShape secondShape) {
+  private ComparisonAlertShape(BlockShape firstShape, BlockShape secondShape) {
     this.firstShape = firstShape;
     this.secondShape = secondShape;
+  }
+
+  BlockShape firstShape() {
+    return firstShape;
+  }
+
+  BlockShape secondShape() {
+    return secondShape;
   }
 
   @Override
@@ -112,8 +144,8 @@ public final class ComparisonAlertShape implements BlockShape {
   }
 
   @Override
-  public List<BoundingBox> boundingBoxes() {
-    List<BoundingBox> first = firstShape.boundingBoxes();
+  public List<BoundingBox> elementaryBoxes() {
+    List<BoundingBox> first = firstShape.elementaryBoxes();
 //    List<BoundingBox> second = secondShape.boundingBoxes();
 //    if (!first.equals(second)) {
 //      System.err.println("Difference in boundingBoxes: " + first + " vs " + second);
@@ -141,6 +173,18 @@ public final class ComparisonAlertShape implements BlockShape {
     boolean second = secondShape.isCubic();
     if (first != second) {
       System.err.println("Difference in isCubic: " + first + " vs " + second);
+      System.err.println("First shape: " + firstShape);
+      System.err.println("Second shape: " + secondShape);
+    }
+    return first;
+  }
+
+  @Override
+  public boolean strictlyInside(double positionX, double positionY, double positionZ) {
+    boolean first = firstShape.strictlyInside(positionX, positionY, positionZ);
+    boolean second = secondShape.strictlyInside(positionX, positionY, positionZ);
+    if (first != second) {
+      System.err.println("Difference in strictlyInside: " + first + " vs " + second);
       System.err.println("First shape: " + firstShape);
       System.err.println("Second shape: " + secondShape);
     }

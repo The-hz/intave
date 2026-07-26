@@ -1,20 +1,43 @@
+/*
+ * Copyright 2026 Intave
+ *
+ * This software is licensed under the PolyForm Perimeter License 1.0.0.
+ * You may use this software for any purpose, except for providing to
+ * others any product that competes with the software.
+ *
+ * A copy of the license is available at:
+ *   https://polyformproject.org/licenses/perimeter/1.0.0/
+ */
+
 package de.jpx3.intave.block.shape;
 
+import de.jpx3.intave.codec.StreamCodec;
 import de.jpx3.intave.diagnostic.MemoryTraced;
 import de.jpx3.intave.share.BoundingBox;
 import de.jpx3.intave.share.Direction;
 import de.jpx3.intave.share.Position;
+import io.netty.buffer.ByteBuf;
 import it.unimi.dsi.fastutil.doubles.DoubleSet;
 
 import java.lang.ref.Reference;
 import java.lang.ref.WeakReference;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 
 import static de.jpx3.intave.share.Direction.Axis.*;
 
 final class CubeShape extends MemoryTraced implements BlockShape {
   private final int x, y, z;
+
+  public static final StreamCodec<ByteBuf, ByteBuf, CubeShape> STREAM_CODEC = StreamCodec.of(
+    (buf, shape) -> {
+      buf.writeInt(shape.x);
+      buf.writeInt(shape.y);
+      buf.writeInt(shape.z);
+    },
+    buf -> new CubeShape(buf.readInt(), buf.readInt(), buf.readInt())
+  );
 
   CubeShape(int x, int y, int z) {
     this.x = x;
@@ -47,12 +70,30 @@ final class CubeShape extends MemoryTraced implements BlockShape {
 
   @Override
   public double min(Direction.Axis axis) {
-    return axis.select(x, y, z);
+    switch (axis) {
+      case X_AXIS:
+        return x;
+      case Y_AXIS:
+        return y;
+      case Z_AXIS:
+        return z;
+      default:
+        throw new IllegalArgumentException("Unknown axis: " + axis);
+    }
   }
 
   @Override
   public double max(Direction.Axis axis) {
-    return axis.select(x, y, z) + 1;
+    switch (axis) {
+      case X_AXIS:
+        return x + 1;
+      case Y_AXIS:
+        return y + 1;
+      case Z_AXIS:
+        return z + 1;
+      default:
+        throw new IllegalArgumentException("Unknown axis: " + axis);
+    }
   }
 
   @Override
@@ -249,7 +290,7 @@ final class CubeShape extends MemoryTraced implements BlockShape {
   private Reference<List<BoundingBox>> boundingBoxCache = NULL_REFERENCE;
 
   @Override
-  public List<BoundingBox> boundingBoxes() {
+  public List<BoundingBox> elementaryBoxes() {
     List<BoundingBox> boundingBoxes = boundingBoxCache.get();
     if (boundingBoxes == null) {
       boundingBoxes = Collections.singletonList(new BoundingBox(x, y, z, x + 1, y + 1, z + 1));
@@ -266,6 +307,28 @@ final class CubeShape extends MemoryTraced implements BlockShape {
   @Override
   public boolean isCubic() {
     return true;
+  }
+
+  @Override
+  public boolean strictlyInside(double positionX, double positionY, double positionZ) {
+    return positionX > x && positionX < x + 1 && positionY > y && positionY < y + 1 && positionZ > z && positionZ < z + 1;
+  }
+
+  @Override
+  public boolean equals(Object obj) {
+    if (this == obj) {
+      return true;
+    }
+    if (obj instanceof CubeShape) {
+      CubeShape other = (CubeShape) obj;
+      return this.x == other.x && this.y == other.y && this.z == other.z;
+    }
+    return false;
+  }
+
+  @Override
+  public int hashCode() {
+    return Objects.hash(x, y, z);
   }
 
   @Override

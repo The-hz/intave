@@ -1,3 +1,14 @@
+/*
+ * Copyright 2026 Intave
+ *
+ * This software is licensed under the PolyForm Perimeter License 1.0.0.
+ * You may use this software for any purpose, except for providing to
+ * others any product that competes with the software.
+ *
+ * A copy of the license is available at:
+ *   https://polyformproject.org/licenses/perimeter/1.0.0/
+ */
+
 package de.jpx3.intave.module.tracker.player;
 
 import com.comphenix.protocol.events.PacketContainer;
@@ -21,7 +32,6 @@ import de.jpx3.intave.user.MessageChannel;
 import de.jpx3.intave.user.User;
 import de.jpx3.intave.user.UserRepository;
 import de.jpx3.intave.user.meta.InventoryMetadata;
-import de.jpx3.intave.user.meta.MetadataBundle;
 import de.jpx3.intave.user.meta.PunishmentMetadata;
 import org.bukkit.entity.HumanEntity;
 import org.bukkit.entity.Player;
@@ -148,49 +158,55 @@ public class PlayerHandTracker extends Module {
   @PacketSubscription(
     priority = ListenerPriority.LOWEST,
     packetsIn = {
-      BLOCK_PLACE, USE_ITEM
+      BLOCK_PLACE, USE_ITEM, USE_ITEM_ON
     }
   )
   public void receiveBlockPlace(PacketEvent event) {
     Player player = event.getPlayer();
     User user = UserRepository.userOf(player);
-    MetadataBundle meta = user.meta();
-    InventoryMetadata inventoryData = meta.inventory();
-    PunishmentMetadata punishmentData = meta.punishment();
-
     PacketContainer packet = event.getPacket();
-    ItemStack heldItem = inventoryData.heldItem();
-    ItemStack offhandItem = inventoryData.offhandItem();
+    boolean requestedItemUse = requestedItemUseLegacy(packet);
 
-    boolean requestedItemUse = requestedItemUse(packet);
-    boolean sword = heldItem != null && heldItem.getType().name().endsWith("_SWORD");
-
-    if (requestedItemUse && sword && System.currentTimeMillis() - punishmentData.timeLastBlockCancel < 5000) {
-      event.setCancelled(true);
-      return;
-    }
-
-    boolean offHandUsable = ItemProperties.canItemBeUsed(player, offhandItem);
-    boolean mainHandUsable = ItemProperties.canItemBeUsed(player, heldItem);
-    boolean useItem = mainHandUsable || offHandUsable;
-
-    // For some reason Minecraft sends BlockPlace packets on 1.9+ with diamond swords
-    boolean usingSword = mainHandUsable && sword;
-    if (usingSword && !offHandUsable && user.protocolVersion() > 47) {
-      return;
-    }
-
-    if (requestedItemUse && useItem) {
-      inventoryData.activateHand();
+    if (requestedItemUse) {
+      handleItemUseRequest(event, user);
     }
   }
 
-  private boolean requestedItemUse(PacketContainer packet) {
+  private boolean requestedItemUseLegacy(PacketContainer packet) {
     if (NEW_ITEM_REQUEST) {
       return true;
     } else {
       StructureModifier<Integer> integers = packet.getIntegers();
       return integers.read(0) == 255;
+    }
+  }
+
+  private void handleItemUseRequest(PacketEvent event, User user) {
+    InventoryMetadata inventoryData = user.meta().inventory();
+    PunishmentMetadata punishmentData = user.meta().punishment();
+
+    ItemStack heldItem = inventoryData.heldItem();
+    ItemStack offhandItem = inventoryData.offhandItem();
+
+    boolean sword = heldItem != null && heldItem.getType().name().endsWith("_SWORD");
+
+    if (sword && System.currentTimeMillis() - punishmentData.timeLastBlockCancel < 5000) {
+      event.setCancelled(true);
+      return;
+    }
+
+    boolean offHandUsable = ItemProperties.canItemBeUsed(user.player(), offhandItem);
+    boolean mainHandUsable = ItemProperties.canItemBeUsed(user.player(), heldItem);
+    boolean useItem = mainHandUsable || offHandUsable;
+
+    // For some reason Minecraft sends BlockPlace packets on 1.9+ with diamond swords
+    boolean usingSword = mainHandUsable && sword;
+    if (usingSword && !offHandUsable && !user.meta().protocol().swordBlockingPossible()) {
+      return;
+    }
+
+    if (useItem) {
+      inventoryData.activateHand();
     }
   }
 

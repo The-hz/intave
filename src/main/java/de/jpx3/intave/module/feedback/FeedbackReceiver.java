@@ -311,7 +311,7 @@ public final class FeedbackReceiver extends Module {
     try {
       feedbackRequest.acknowledge(player);
     } catch (Exception e) {
-      if (IntaveControl.DISABLE_LICENSE_CHECK) {
+      if (IntaveControl.DEBUG) {
         IntaveLogger.logger().error("Error while acknowledging " + feedbackRequest.callback() + " for " + feedbackRequest.target());
         e.printStackTrace();
       }
@@ -321,7 +321,7 @@ public final class FeedbackReceiver extends Module {
   @PacketSubscription(
     priority = ListenerPriority.LOWEST,
     packetsIn = {
-      USE_ENTITY
+      ATTACK_ENTITY, USE_ENTITY
     }
   )
   public void cancelAttacksIfTransactionMissing(PacketEvent event) {

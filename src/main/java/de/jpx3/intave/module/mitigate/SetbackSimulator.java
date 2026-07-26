@@ -1,3 +1,14 @@
+/*
+ * Copyright 2026 Intave
+ *
+ * This software is licensed under the PolyForm Perimeter License 1.0.0.
+ * You may use this software for any purpose, except for providing to
+ * others any product that competes with the software.
+ *
+ * A copy of the license is available at:
+ *   https://polyformproject.org/licenses/perimeter/1.0.0/
+ */
+
 package de.jpx3.intave.module.mitigate;
 
 import de.jpx3.intave.IntaveControl;
@@ -10,7 +21,8 @@ import de.jpx3.intave.block.collision.Collision;
 import de.jpx3.intave.block.shape.BlockShape;
 import de.jpx3.intave.block.type.BlockTypeAccess;
 import de.jpx3.intave.check.movement.Physics;
-import de.jpx3.intave.check.movement.physics.Pose;
+import de.jpx3.intave.check.movement.physics.environment.Pose;
+import de.jpx3.intave.check.movement.physics.environment.SimulationEnvironment;
 import de.jpx3.intave.executor.Synchronizer;
 import de.jpx3.intave.klass.Lookup;
 import de.jpx3.intave.klass.trace.Caller;
@@ -22,6 +34,7 @@ import de.jpx3.intave.player.Effects;
 import de.jpx3.intave.share.BlockPosition;
 import de.jpx3.intave.share.BoundingBox;
 import de.jpx3.intave.share.ClientMath;
+import de.jpx3.intave.share.Motion;
 import de.jpx3.intave.user.MessageChannel;
 import de.jpx3.intave.user.User;
 import de.jpx3.intave.user.UserRepository;
@@ -39,6 +52,7 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
 
+import static de.jpx3.intave.check.movement.physics.environment.MoveMetric.RECEIVED_VELOCITY_PACKET;
 import static de.jpx3.intave.math.MathHelper.minmax;
 import static de.jpx3.intave.share.ClientMath.floor;
 import static de.jpx3.intave.share.Direction.Axis.*;
@@ -46,13 +60,12 @@ import static org.bukkit.event.player.PlayerTeleportEvent.TeleportCause.NETHER_P
 import static org.bukkit.event.player.PlayerTeleportEvent.TeleportCause.UNKNOWN;
 
 public final class SetbackSimulator extends Module {
-  private Physics physicsCheck;
   private InternalTeleportApplier teleportMethodContainer;
   private boolean closeInventoryOnDetection;
 
   @Override
   public void enable() {
-    this.physicsCheck = plugin.checks().searchCheck(Physics.class);
+    Physics physicsCheck = plugin.checks().searchCheck(Physics.class);
     this.closeInventoryOnDetection = physicsCheck.closeInventoryOnDetection();
     this.teleportMethodContainer = new InternalTeleportApplier();
   }
@@ -80,7 +93,7 @@ public final class SetbackSimulator extends Module {
 
   public void emulationSetBack(
     Player player,
-    Vector motion,
+    Motion motion,
     int ticks,
     boolean cancellable
   ) {
@@ -89,7 +102,7 @@ public final class SetbackSimulator extends Module {
 
   public void emulationSetBack(
     Player player,
-    Vector motion,
+    Motion motion,
     int ticks,
     int delay,
     boolean cancellable
@@ -103,11 +116,11 @@ public final class SetbackSimulator extends Module {
       return;
     }
 
-    Vector originalMotion = motion.clone();
+    Motion originalMotion = motion.copy();
     boolean isOriginal = true;
 
     if (movementData.emulationVelocity != null) {
-      if (movementData.pastReceiveVelocityPacket < 2) {
+      if (movementData.ticksPast(RECEIVED_VELOCITY_PACKET) < 2) {
         motion = movementData.emulationVelocity;
         isOriginal = false;
       }
@@ -194,14 +207,14 @@ public final class SetbackSimulator extends Module {
   private void proceedEmulationTick(
     World world,
     Player player,
-    Vector motion,
+    Motion motion,
     int ticks,
     int startingTicks,
     int delay,
     boolean cancellable
   ) {
     if (!Bukkit.isPrimaryThread()) {
-      Vector finalMotion1 = motion;
+      Motion finalMotion1 = motion;
       Synchronizer.synchronizeDelayed(() -> proceedEmulationTick(world, player, finalMotion1, ticks, startingTicks, delay, cancellable), 0);
       return;
     }
@@ -223,8 +236,8 @@ public final class SetbackSimulator extends Module {
     Location futurePosition = movementData.verifiedLocation();
     BoundingBox boundingBox = BoundingBox.fromPosition(user, movementData, futurePosition);
 
-    Vector emulationVelocity = movementData.emulationVelocity;
-    if (emulationVelocity != null && movementData.pastReceiveVelocityPacket < 2) {
+    Motion emulationVelocity = movementData.emulationVelocity;
+    if (emulationVelocity != null && movementData.ticksPast(RECEIVED_VELOCITY_PACKET) < 2) {
       motion = motionProceed(emulationVelocity, user, boundingBox, true);
       movementData.emulationVelocity = null;
     } else {
@@ -232,17 +245,17 @@ public final class SetbackSimulator extends Module {
     }
 
     // add y-motion to fall distance
-    if (motion.getY() < 0) {
-      movementData.artificialFallDistance += (float) -motion.getY();
+    if (motion.motionY < 0) {
+      movementData.artificialFallDistance += (float) -motion.motionY;
     }
 
-    if (!Collision.present(player, BoundingBox.fromPosition(user, movementData, futurePosition.clone().add(motion)))) {
-      futurePosition = futurePosition.clone().add(motion);
+    if (!Collision.present(user, movementData, BoundingBox.fromPosition(user, movementData, futurePosition.clone().add(motion.toBukkitVector())))) {
+      futurePosition = futurePosition.clone().add(motion.toBukkitVector());
     }
     futurePosition.setYaw(movementData.rotationYaw);
     futurePosition.setPitch(movementData.rotationPitch);
 
-    boolean exitBundle = (Math.abs(motion.getX()) < 0.01 && Math.abs(motion.getZ()) < 0.01 && motion.getY() == 0.0 && cancellable) || ticks <= 0 || !player.getWorld().equals(world);
+    boolean exitBundle = (Math.abs(motion.motionX) < 0.01 && Math.abs(motion.motionZ) < 0.01 && motion.motionY == 0.0 && cancellable) || ticks <= 0 || !player.getWorld().equals(world);
 
     if (exitBundle) {
       // velocity
@@ -250,7 +263,7 @@ public final class SetbackSimulator extends Module {
       // fixes stuck in block below, please remove and fix me differently
       futurePosition.subtract(0, 0.02, 0);
       boundingBox = BoundingBox.fromPosition(user, movementData, futurePosition);
-      futurePosition.add(0, Collision.nonePresent(player, boundingBox) ? 0.03 : 0.0201, 0);
+      futurePosition.add(0, Collision.nonePresent(user, movementData, boundingBox) ? 0.03 : 0.0201, 0);
       boundingBox = BoundingBox.fromPosition(user, movementData, futurePosition);
 
       /*
@@ -261,23 +274,22 @@ public final class SetbackSimulator extends Module {
       user.tickFeedback(
         () -> violationLevelData.disableActiveTeleportBundleNextTeleportAccept = true
       );
-      teleport(player, motion.getY(), futurePosition);
+      teleport(player, motion.motionY, futurePosition);
 //      violationLevelData.isInActiveTeleportBundle = false;
 
-      Vector futureMotion = motionProceed(motion, user, boundingBox, true);
+      Motion futureMotion = motionProceed(motion, user, boundingBox, true);
 
       movementData.willReceiveFinalSetbackVelocity = true;
-      player.setVelocity(futureMotion);
+      player.setVelocity(futureMotion.toBukkitVector());
 
 //      player.sendMessage("Setback velocity: " + MathHelper.formatMotion(futureMotion));
-//      movementData.baseMotionX = futureMotion.getX();
-//      movementData.baseMotionY = futureMotion.getY();
-//      movementData.baseMotionZ = futureMotion.getZ();
+//      movementData.baseMotionX = futureMotion.motionX;
+//      movementData.baseMotionY = futureMotion.motionY;
+//      movementData.baseMotionZ = futureMotion.motionZ;
 //      movementData.motionProcessorContext.setTo(futureMotion);
 //      violationLevelData.physicsOffset -= 0.3f;
 
       if (movementData.onGround) {
-        physicsCheck.applyFallDamageUpdate(user);
         movementData.artificialFallDistance = 0;
       }
 
@@ -289,7 +301,7 @@ public final class SetbackSimulator extends Module {
       //player.teleport(futurePosition);
 
       boundingBox = BoundingBox.fromPosition(user, movementData, futurePosition);
-      boolean boundingBoxIntersection = Collision.present(user.player(), boundingBox);
+      boolean boundingBoxIntersection = Collision.present(user, movementData, boundingBox);
       if (boundingBoxIntersection) {
         double positionX = (boundingBox.minX + boundingBox.maxX) / 2.0;
         double positionY = (boundingBox.minY + boundingBox.maxY) / 2.0;
@@ -298,7 +310,7 @@ public final class SetbackSimulator extends Module {
         futurePosition = futurePosition.add(pushVector);
       }
 
-      teleport(player, motion.getY(), futurePosition);
+      teleport(player, motion.motionY, futurePosition);
 
       if (IntaveControl.DEBUG_EMULATION) {
         String s = ChatColor.DARK_PURPLE + "[E/] " + MathHelper.formatMotion(motion) + (boundingBoxIntersection ? " (block-push)" : "") + " at " + MathHelper.formatPosition(futurePosition) + " (" + ticks + " ticks remaining)";
@@ -306,15 +318,11 @@ public final class SetbackSimulator extends Module {
       }
       //   s += " @" + movementData.entityBoundingBox();
 
-      Vector finalMotion = motion.clone();
+      Motion finalMotion = motion.copy();
       Synchronizer.synchronizeDelayed(() -> proceedEmulationTick(world, player, finalMotion, ticks - 1, startingTicks, delay, cancellable), delay);
 
       // velocity
-      Vector futureMotion = motionProceed(motion, user, boundingBox, true);
-//      movementData.physicsMotionX = futureMotion.getX();
-//      movementData.physicsMotionY = futureMotion.getY();
-//      movementData.physicsMotionZ = futureMotion.getZ();
-
+      Motion futureMotion = motionProceed(motion, user, boundingBox, true);
       movementData.willReceiveSetbackVelocity = true;
       movementData.setbackOverrideVelocity = futureMotion;
       // this is not the real setback motion - velocity will be applied later
@@ -322,7 +330,7 @@ public final class SetbackSimulator extends Module {
     }
   }
 
-  private Vector motionProceed(Vector lastMotion, User user, BoundingBox boundingBox, boolean applyPhysics) {
+  private Motion motionProceed(Motion lastMotion, User user, BoundingBox boundingBox, boolean applyPhysics) {
     Player player = user.player();
     MovementMetadata movementData = user.meta().movement();
     float rotationPitch = movementData.rotationPitch;
@@ -332,9 +340,9 @@ public final class SetbackSimulator extends Module {
     // Pre Emulation
     //
 
-    double motionX = lastMotion.getX();
-    double motionY = lastMotion.getY();
-    double motionZ = lastMotion.getZ();
+    double motionX = lastMotion.motionX;
+    double motionY = lastMotion.motionY;
+    double motionZ = lastMotion.motionZ;
 
     if (applyPhysics) {
       if (movementData.pose() == Pose.FALL_FLYING) {
@@ -369,8 +377,8 @@ public final class SetbackSimulator extends Module {
         motionY *= 0.98f;
         motionZ *= 0.99f;
       } else {
-        if (movementData.inWater) {
-          motionY = lastMotion.getY() * 0.8f;
+        if (movementData.inWater()) {
+          motionY = lastMotion.motionY * 0.8f;
           motionY -= 0.02;
         } else {
           if (Effects.levitationEffectActive(player)) {
@@ -389,12 +397,12 @@ public final class SetbackSimulator extends Module {
     // Prepare next tick
     //
 
-    Vector collisionVector = resolveCollisionVector(player, boundingBox, lastMotion.getX(), motionY, lastMotion.getZ());
-    boolean onGround = motionY != collisionVector.getY() && motionY < 0.0;
-    motionY = collisionVector.getY();
+    Motion collisionVector = resolveCollisionVector(player, boundingBox, lastMotion.motionX, motionY, lastMotion.motionZ);
+    boolean onGround = motionY != collisionVector.motionY && motionY < 0.0;
+    motionY = collisionVector.motionY;
     double multiplier;
     if (applyPhysics && movementData.pose() != Pose.FALL_FLYING) {
-      if (movementData.inWater) {
+      if (movementData.inWater()) {
         multiplier = 0.8f;
       } else {
         multiplier = onGround ? 0.546f : 0.91f;
@@ -402,7 +410,7 @@ public final class SetbackSimulator extends Module {
     } else {
       multiplier = 1;
     }
-    if (movementData.lastOnGround && !movementData.onGround) {
+    if (movementData.lastOnGround() && !movementData.onGround) {
       multiplier *= 0.6f;
     }
     motionX *= multiplier;
@@ -433,7 +441,7 @@ public final class SetbackSimulator extends Module {
         motionY *= 0.25f;
         motionZ *= 0.25D;
       }
-      movementData.lastOnGround = movementData.onGround;
+      movementData.setLastOnGround(movementData.onGround());
       movementData.onGround = onGround;
     }
     collisionVector = resolveCollisionVector(player, boundingBox, motionX, motionY, motionZ);
@@ -442,9 +450,9 @@ public final class SetbackSimulator extends Module {
 
     // Limit motion (motion cannot be greater than 4.0,
     // otherwise -> Excessive velocity set detected: tried to set velocity of entity #33 to ...)
-    collisionVector.setX(limitMotionAxis(collisionVector.getX()));
-    collisionVector.setY(limitMotionAxis(collisionVector.getY()));
-    collisionVector.setZ(limitMotionAxis(collisionVector.getZ()));
+    collisionVector.motionX = limitMotionAxis(collisionVector.motionX);
+    collisionVector.motionY = limitMotionAxis(collisionVector.motionY);
+    collisionVector.motionZ = limitMotionAxis(collisionVector.motionZ);
 
     return collisionVector;
   }
@@ -459,7 +467,7 @@ public final class SetbackSimulator extends Module {
 
     BoundingBox entityBoundingBox = BoundingBox.fromPosition(user, movementData, teleportLocation);
     movementData.setBoundingBox(entityBoundingBox);
-    movementData.setVerifiedLocation(teleportLocation.clone(), "Emulation-Setback");
+    movementData.setVerifiedLocation(teleportLocation.clone());
 //    player.teleport(teleportLocation);
     if (closeInventoryOnDetection && user.meta().inventory().inventoryOpen()) {
       player.closeInventory();
@@ -469,13 +477,9 @@ public final class SetbackSimulator extends Module {
   }
 
   private void updateMovementStatus(User user) {
-    Player player = user.player();
-    World world = player.getWorld();
     MovementMetadata movementData = user.meta().movement();
+    // this is shit, no?
     movementData.inWater = Collision.rasterizedLiquidPresentSearch(user, movementData.boundingBox());
-    if (movementData.inWater) {
-      movementData.inWaterSinceFallDamagePostCheck = true;
-    }
   }
 
   private synchronized void rotationlessTeleport(Player player, Location to, double motionY, float nativeYaw, float nativePitch) {
@@ -535,7 +539,7 @@ public final class SetbackSimulator extends Module {
     };
   }
 
-  public static Vector resolveCollisionVector(
+  public static Motion resolveCollisionVector(
     Player player,
     BoundingBox entityBoundingBox,
     double motionX, double motionY, double motionZ
@@ -544,7 +548,9 @@ public final class SetbackSimulator extends Module {
     motionY = minmax(-4, motionY, 4);
     motionZ = minmax(-4, motionZ, 4);
 
-    BlockShape collisionBox = Collision.shape(player, entityBoundingBox.expand(motionX, motionY, motionZ));
+    User user = UserRepository.userOf(player);
+
+    BlockShape collisionBox = Collision.shape(user, user.meta().movement(), entityBoundingBox.expand(motionX, motionY, motionZ));
 
     // motion y
     motionY = collisionBox.allowedOffset(Y_AXIS, entityBoundingBox, motionY);
@@ -557,13 +563,13 @@ public final class SetbackSimulator extends Module {
     // motion z
     motionZ = collisionBox.allowedOffset(Z_AXIS, entityBoundingBox, motionZ);
 
-    return new Vector(motionX, motionY, motionZ);
+    return new Motion(motionX, motionY, motionZ);
   }
 
   private Vector resolvePushVector(Player player, double positionX, double positionY, double positionZ) {
     BlockPosition blockPosition = new BlockPosition(positionX, positionY, positionZ);
-    double d0 = positionX - blockPosition.xCoord;
-    double d1 = positionZ - blockPosition.zCoord;
+    double d0 = positionX - blockPosition.x();
+    double d1 = positionZ - blockPosition.z();
     Vector vector = new Vector();
     int i = -1;
     double d2 = 9999.0D;
@@ -607,6 +613,7 @@ public final class SetbackSimulator extends Module {
 
   private boolean hasEmptyCollisionBox(Player player, BlockPosition blockPosition) {
     User user = UserRepository.userOf(player);
-    return Collision.nonePresent(player, BoundingBox.fromPosition(user, user.meta().movement(), blockPosition));
+    SimulationEnvironment movement = user.meta().movement();
+    return Collision.nonePresent(user, movement, BoundingBox.fromPosition(user, movement, blockPosition));
   }
 }

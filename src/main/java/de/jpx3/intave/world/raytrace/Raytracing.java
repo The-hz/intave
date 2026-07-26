@@ -1,49 +1,43 @@
+/*
+ * Copyright 2026 Intave
+ *
+ * This software is licensed under the PolyForm Perimeter License 1.0.0.
+ * You may use this software for any purpose, except for providing to
+ * others any product that competes with the software.
+ *
+ * A copy of the license is available at:
+ *   https://polyformproject.org/licenses/perimeter/1.0.0/
+ */
+
 package de.jpx3.intave.world.raytrace;
 
-import de.jpx3.intave.check.movement.physics.Pose;
+import de.jpx3.intave.check.movement.physics.environment.Pose;
 import de.jpx3.intave.diagnostic.timings.Timings;
 import de.jpx3.intave.math.SinusCache;
 import de.jpx3.intave.module.tracker.entity.Entity;
+import de.jpx3.intave.player.ActionBar;
 import de.jpx3.intave.share.BoundingBox;
 import de.jpx3.intave.share.MovingObjectPosition;
-import de.jpx3.intave.share.NativeVector;
+import de.jpx3.intave.share.Position;
+import de.jpx3.intave.share.RawVector3d;
+import de.jpx3.intave.user.MessageChannel;
 import de.jpx3.intave.user.User;
 import de.jpx3.intave.user.UserRepository;
 import de.jpx3.intave.user.meta.MetadataBundle;
+import de.jpx3.intave.world.Particles;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.entity.Player;
 
+import java.util.ArrayList;
+import java.util.List;
+
+import static de.jpx3.intave.check.movement.physics.environment.MoveMetric.SNEAKING;
+
 public final class Raytracing {
-  private static Raytracer raytracer, universalRaytracer;
+	private static final Raytracer RAYTRACER = new UniversalRaytracer();
   private static final boolean[] PESSIMISTIC_BOOLEAN_ORDER = new boolean[]{false, true};
-
-  public static void setup() {
-//    String className;
-//    if (MinecraftVersions.VER1_14_0.atOrAbove()) {
-//      className = "de.jpx3.intave.world.raytrace.v14Raytracer";
-//    } else if (MinecraftVersions.VER1_13_0.atOrAbove()) {
-//      className = "de.jpx3.intave.world.raytrace.v13Raytracer";
-//    } else if (MinecraftVersions.VER1_9_0.atOrAbove()) {
-//      className = "de.jpx3.intave.world.raytrace.v9Raytracer";
-//    } else {
-//      className = "de.jpx3.intave.world.raytrace.v8Raytracer";
-//    }
-//    PatchyLoadingInjector.loadUnloadedClassPatched(Raytracing.class.getClassLoader(), className);
-//    raytracer = instanceOf(className);
-    universalRaytracer = new UniversalRaytracer();
-//    raytracer = new UnivRaytracer();
-  }
-
-  private static <T> T instanceOf(String className) {
-    try {
-      //noinspection unchecked
-      return (T) Class.forName(className).newInstance();
-    } catch (Exception exception) {
-      throw new IllegalStateException(exception);
-    }
-  }
 
   public static float reachDistanceOf(Player player) {
     return reachDistanceOf(UserRepository.userOf(player));
@@ -67,7 +61,8 @@ public final class Raytracing {
     double lastPositionX, double lastPositionY, double lastPositionZ,
     float lastRotationYaw,
     float rotationYaw, float rotationPitch,
-    double expandHitbox, boolean withoutMouseDelayFix) {
+    double expandHitbox, boolean withoutMouseDelayFix
+  ) {
     double blockReachDistance = Raytracing.reachDistanceOf(player);
 //    float rotationYaw = movementData.rotationYaw % 360;
 
@@ -152,89 +147,92 @@ public final class Raytracing {
     EntityRaytraceBlockConstraint rayTraceBlocks
   ) {
     Timings.SERVICE_RAYTRACER_ENTITY.start();
-    NativeVector eyeVector = positionEyes(player, prevPosX, prevPosY, prevPosZ);
     double blockReachDistance = 6;
     double attackReachDistance = reachDistanceOf(player);
     double lastReach = 10;
-    NativeVector lastHitVec = null;
-    for (boolean fastMath : PESSIMISTIC_BOOLEAN_ORDER) {
-      if (lastReach < attackReachDistance)
-        break;
-      NativeVector interpolatedLookVec = wrappedVectorForRotation(pitch, prevYaw, fastMath);
-      NativeVector lookVector = eyeVector.addVector(
-        interpolatedLookVec.xCoord * blockReachDistance,
-        interpolatedLookVec.yCoord * blockReachDistance,
-        interpolatedLookVec.zCoord * blockReachDistance
-      );
-      BoundingBox hitBox = entityBoundingBox.grow(boundingBoxExpansion, boundingBoxExpansion, boundingBoxExpansion);
-      if (alternativeYDifference != 0) {
-        hitBox = hitBox.addJustMaxY(alternativeYDifference);
+    RawVector3d lastHitVec = null;
+    RawVector3d lastEyeVector = null;
+
+    User user = UserRepository.userOf(player);
+    Pose assumedPose = user.meta().movement().pose();
+    boolean sneakUncertainty = user.meta().protocol().delayedSneak() &&
+      user.meta().movement().ticksPast(SNEAKING) <= 2 &&
+      assumedPose == Pose.STANDING;
+
+    for (int i = 0; i < 2; i++) {
+      Pose selectedPose;
+      if (i == 0) {
+        selectedPose = assumedPose;
+      } else if (sneakUncertainty && lastReach >= attackReachDistance) {
+        selectedPose = Pose.CROUCHING;
+      } else {
+        continue;
       }
-      MovingObjectPosition movingObjectPosition = hitBox.calculateIntercept(eyeVector, lookVector);
-      if (hitBox.isVecInside(eyeVector)) {
-        lastReach = 0;
-        lastHitVec = null;
-      } else if (movingObjectPosition != null) {
-        double distanceToEntity = eyeVector.distanceTo(movingObjectPosition.hitVec);
-        double reach;
-        boolean blockRaytrace = false;
-        if (rayTraceBlocks == EntityRaytraceBlockConstraint.ACCEPT_BLOCKS) {
-          MovingObjectPosition blockMovingPosition = Raytracing.blockRayTrace(player.getWorld(), player, eyeVector, lookVector);
-          double distanceToBlock = blockMovingPosition == null || blockMovingPosition.hitVec == null ? 10 : eyeVector.distanceTo(blockMovingPosition.hitVec);
-          reach = distanceToBlock < distanceToEntity ? 10 : distanceToEntity;
-          blockRaytrace = true;
-        } else {
-          reach = distanceToEntity;
+
+      RawVector3d eyeVector = positionEyes(player, selectedPose, prevPosX, prevPosY, prevPosZ);
+
+      for (boolean fastMath : PESSIMISTIC_BOOLEAN_ORDER) {
+        if (lastReach < attackReachDistance)
+          break;
+
+        if (lastEyeVector == null) {
+          lastEyeVector = eyeVector;
         }
-        if (reach < lastReach && (reach < attackReachDistance || blockRaytrace)) {
-          lastReach = reach;
-          lastHitVec = movingObjectPosition.hitVec;
+
+        RawVector3d interpolatedLookVec = wrappedVectorForRotation(pitch, prevYaw, fastMath);
+        RawVector3d lookVector = eyeVector.addVector(
+          interpolatedLookVec.x() * blockReachDistance,
+          interpolatedLookVec.y() * blockReachDistance,
+          interpolatedLookVec.z() * blockReachDistance
+        );
+        BoundingBox hitBox = entityBoundingBox.grow(boundingBoxExpansion, boundingBoxExpansion, boundingBoxExpansion);
+        if (alternativeYDifference != 0) {
+          hitBox = hitBox.addJustMaxY(alternativeYDifference);
+        }
+        MovingObjectPosition movingObjectPosition = hitBox.calculateIntercept(eyeVector, lookVector);
+        if (hitBox.isVecInside(eyeVector)) {
+          lastReach = 0;
+          lastHitVec = null;
+          lastEyeVector = null;
+        } else if (movingObjectPosition != null) {
+          double distanceToEntity = eyeVector.distanceTo(movingObjectPosition.hitVec);
+          double reach;
+          boolean blockRaytrace = false;
+          if (rayTraceBlocks == EntityRaytraceBlockConstraint.ACCEPT_BLOCKS) {
+            MovingObjectPosition blockMovingPosition = Raytracing.blockRayTrace(player.getWorld(), player, eyeVector, lookVector);
+            double distanceToBlock = blockMovingPosition == null || blockMovingPosition.hitVec == null ? 10 : eyeVector.distanceTo(blockMovingPosition.hitVec);
+            reach = distanceToBlock < distanceToEntity ? 10 : distanceToEntity;
+            blockRaytrace = true;
+          } else {
+            reach = distanceToEntity;
+          }
+          if (reach < lastReach && (reach < attackReachDistance || blockRaytrace)) {
+            lastReach = reach;
+            lastEyeVector = eyeVector;
+            lastHitVec = movingObjectPosition.hitVec;
+          }
         }
       }
     }
 
+    if (lastEyeVector == null) {
+      lastEyeVector = positionEyes(player, Pose.STANDING, prevPosX, prevPosY, prevPosZ);
+    }
+
     Timings.SERVICE_RAYTRACER_ENTITY.stop();
-    return Raytrace.ofNative(eyeVector, lastHitVec, lastReach);
+    return Raytrace.ofNative(lastEyeVector, lastHitVec, lastReach);
   }
 
-  private static NativeVector wrappedVectorForRotation(float pitch, float prevYaw, boolean fastMath) {
+  private static RawVector3d wrappedVectorForRotation(float pitch, float prevYaw, boolean fastMath) {
     float var3 = SinusCache.cos(-prevYaw * 0.017453292f - (float) Math.PI, fastMath);
     float var4 = SinusCache.sin(-prevYaw * 0.017453292F - (float) Math.PI, fastMath);
     float var5 = -SinusCache.cos(-pitch * 0.017453292f, fastMath);
     float var6 = SinusCache.sin(-pitch * 0.017453292f, fastMath);
-    return new NativeVector(var4 * var5, var6, var3 * var5);
+    return new RawVector3d(var4 * var5, var6, var3 * var5);
   }
 
-  private static NativeVector positionEyes(Player player, double prevPosX, double prevPosY, double prevPosZ) {
-    return new NativeVector(prevPosX, prevPosY + resolvePlayerEyeHeight(player), prevPosZ);
-  }
-
-  public static MovingObjectPosition blockShrinkRayTrace(Player player, Location playerLocation, double shrik) {
-    double blockReachDistance = resolveBlockReachDistance(player.getGameMode());
-    double eyeHeight = resolvePlayerEyeHeight(player);
-    return blockRayTrace(player, playerLocation, playerLocation, blockReachDistance, eyeHeight, 1.0f);
-  }
-
-  public static MovingObjectPosition blockShrinkRayTrace(Player player, Location location, Location prevLocation, double blockReachDistance, double eyeHeight, float partialTicks) {
-    NativeVector eyeVector = resolvePositionEyes(location, prevLocation, eyeHeight, partialTicks);
-    NativeVector lookVector = resolveLookVector(location, prevLocation, partialTicks);
-    NativeVector targetVector = eyeVector.addVector(lookVector.xCoord * blockReachDistance, lookVector.yCoord * blockReachDistance, lookVector.zCoord * blockReachDistance);
-    return blockShrinkRayTrace(location.getWorld(), player, eyeVector, targetVector);
-  }
-
-  public static MovingObjectPosition blockShrinkRayTrace(World world, Player player, NativeVector eyeVector, NativeVector targetVector) {
-    try {
-      Timings.SERVICE_RAYTRACER_BLOCK.start();
-      return universalRaytracer.raytrace(world, player, eyeVector, targetVector);
-    } finally {
-      Timings.SERVICE_RAYTRACER_BLOCK.stop();
-    }
-  }
-
-  public static MovingObjectPosition blockRayTrace(Player player, Location playerLocation) {
-    double blockReachDistance = resolveBlockReachDistance(player.getGameMode());
-    double eyeHeight = resolvePlayerEyeHeight(player);
-    return blockRayTrace(player, playerLocation, playerLocation, blockReachDistance, eyeHeight, 1.0f);
+  private static RawVector3d positionEyes(Player player, Pose pose, double prevPosX, double prevPosY, double prevPosZ) {
+    return new RawVector3d(prevPosX, prevPosY + resolvePlayerEyeHeight(player, pose), prevPosZ);
   }
 
   public static MovingObjectPosition blockRayTrace(Player player, Location playerLocation, Pose pose) {
@@ -244,13 +242,33 @@ public final class Raytracing {
   }
 
   public static MovingObjectPosition blockRayTrace(Player player, Location location, Location prevLocation, double blockReachDistance, double eyeHeight, float partialTicks) {
-    NativeVector eyeVector = resolvePositionEyes(location, prevLocation, eyeHeight, partialTicks);
-    NativeVector vec4 = resolveLookVector(location, prevLocation, partialTicks);
-    NativeVector targetVector = eyeVector.addVector(vec4.xCoord * blockReachDistance, vec4.yCoord * blockReachDistance, vec4.zCoord * blockReachDistance);
+    RawVector3d eyeVector = resolvePositionEyes(location, prevLocation, eyeHeight, partialTicks);
+    RawVector3d vec4 = resolveLookVector(location, prevLocation, partialTicks);
+    RawVector3d targetVector = eyeVector.addVector(vec4.x() * blockReachDistance, vec4.y() * blockReachDistance, vec4.z() * blockReachDistance);
+    User user = UserRepository.userOf(player);
+    if (user.receives(MessageChannel.DEBUG_HITRAY)) {
+      List<Position> positions = new ArrayList<>();
+      for (int i = 0; i < 10; i++) {
+        double t = i / 10.0;
+        Position position = new Position(
+          eyeVector.x() + (targetVector.x() - eyeVector.x()) * t,
+          eyeVector.y() + (targetVector.y() - eyeVector.y()) * t,
+          eyeVector.z() + (targetVector.z() - eyeVector.z()) * t
+        );
+        positions.add(position);
+      }
+      for (Position position : positions) {
+        Particles.spawnVillagerHappyParticleAt(user, position);
+      }
+      ActionBar.sendActionBar(
+        player,
+	      eyeVector + " " + location.getY() + " " + user.meta().movement().rotationPitch
+      );
+    }
     return blockRayTrace(location.getWorld(), player, eyeVector, targetVector);
   }
 
-  public static MovingObjectPosition blockRayTrace(World world, Player player, NativeVector eyeVector, NativeVector targetVector) {
+  public static MovingObjectPosition blockRayTrace(World world, Player player, RawVector3d eyeVector, RawVector3d targetVector) {
     try {
       Timings.SERVICE_RAYTRACER_BLOCK.start();
 //      MovingObjectPosition raytrace = raytracer.raytrace(world, player, eyeVector, targetVector);
@@ -265,7 +283,7 @@ public final class Raytracing {
         player.playEffect(targetVector.toLocation(world), Effect.HAPPY_VILLAGER, 0);
       }*/
 
-      MovingObjectPosition backup = Raytracing.universalRaytracer.raytrace(world, player, eyeVector, targetVector);
+      MovingObjectPosition backup = Raytracing.RAYTRACER.raytrace(world, player, eyeVector, targetVector);
 
       /*
       if (backup != null) {
@@ -291,12 +309,12 @@ public final class Raytracing {
     }
   }
 
-  public static NativeVector resolvePositionEyes(Location location, Location prevLocation, double eyeHeight, float partialTicks) {
+  public static RawVector3d resolvePositionEyes(Location location, Location prevLocation, double eyeHeight, float partialTicks) {
     double posX = location.getX();
     double posY = location.getY();
     double posZ = location.getZ();
     if (partialTicks == 1.0f) {
-      return new NativeVector(posX, posY + eyeHeight, posZ);
+      return new RawVector3d(posX, posY + eyeHeight, posZ);
     }
     double prevPosX = prevLocation.getX();
     double prevPosY = prevLocation.getY();
@@ -304,10 +322,10 @@ public final class Raytracing {
     double d0 = prevPosX + (posX - prevPosX) * partialTicks;
     double d2 = prevPosY + (posY - prevPosY) * partialTicks + eyeHeight;
     double d3 = prevPosZ + (posZ - prevPosZ) * partialTicks;
-    return new NativeVector(d0, d2, d3);
+    return new RawVector3d(d0, d2, d3);
   }
 
-  private static NativeVector resolveLookVector(Location location, Location prevLocation, float partialTicks) {
+  private static RawVector3d resolveLookVector(Location location, Location prevLocation, float partialTicks) {
     float rotationYawHead = location.getYaw();
     float rotationPitch = location.getPitch();
     if (partialTicks == 1.0f) {
@@ -320,17 +338,17 @@ public final class Raytracing {
     return resolveVectorForRotation(f, f2);
   }
 
-  private static NativeVector resolveVectorForRotation(float pitch, float yaw) {
+  private static RawVector3d resolveVectorForRotation(float pitch, float yaw) {
     float f = SinusCache.cos(-yaw * 0.017453292f - 3.1415927f, false);
     float f2 = SinusCache.sin(-yaw * 0.017453292f - 3.1415927f, false);
     float f3 = -SinusCache.cos(-pitch * 0.017453292f, false);
     float f4 = SinusCache.sin(-pitch * 0.017453292f, false);
-    return new NativeVector(f2 * f3, f4, f * f3);
+    return new RawVector3d(f2 * f3, f4, f * f3);
   }
 
   public static double resolvePlayerEyeHeight(Player player) {
     User user = UserRepository.userOf(player);
-    return user.meta().movement().eyeHeight();
+	  return user.meta().movement().eyeHeight();
   }
 
   public static double resolvePlayerEyeHeight(Player player, Pose pose) {

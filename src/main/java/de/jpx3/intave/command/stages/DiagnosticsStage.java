@@ -1,3 +1,14 @@
+/*
+ * Copyright 2026 Intave
+ *
+ * This software is licensed under the PolyForm Perimeter License 1.0.0.
+ * You may use this software for any purpose, except for providing to
+ * others any product that competes with the software.
+ *
+ * A copy of the license is available at:
+ *   https://polyformproject.org/licenses/perimeter/1.0.0/
+ */
+
 package de.jpx3.intave.command.stages;
 
 import com.comphenix.protocol.PacketType;
@@ -6,12 +17,11 @@ import com.comphenix.protocol.ProtocolManager;
 import com.comphenix.protocol.events.PacketAdapter;
 import com.comphenix.protocol.events.PacketEvent;
 import com.comphenix.protocol.injector.PacketFilterManager;
-import com.comphenix.protocol.utility.MinecraftVersion;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import de.jpx3.intave.IntaveControl;
 import de.jpx3.intave.IntavePlugin;
 import de.jpx3.intave.access.player.trust.TrustFactor;
+import de.jpx3.intave.adapter.MinecraftVersion;
 import de.jpx3.intave.adapter.MinecraftVersions;
 import de.jpx3.intave.block.collision.Collision;
 import de.jpx3.intave.check.Check;
@@ -20,7 +30,6 @@ import de.jpx3.intave.cleanup.GarbageCollector;
 import de.jpx3.intave.command.CommandStage;
 import de.jpx3.intave.command.Optional;
 import de.jpx3.intave.command.SubCommand;
-import de.jpx3.intave.connect.upload.RealtimedataUplink;
 import de.jpx3.intave.diagnostic.PacketSynchronizations;
 import de.jpx3.intave.diagnostic.timings.Timing;
 import de.jpx3.intave.diagnostic.timings.Timings;
@@ -32,7 +41,7 @@ import de.jpx3.intave.module.nayoro.Nayoro;
 import de.jpx3.intave.module.nayoro.event.AttackEvent;
 import de.jpx3.intave.module.nayoro.event.BlockPlaceEvent;
 import de.jpx3.intave.module.nayoro.event.sink.EventSink;
-import de.jpx3.intave.module.testing.ChestLootProvider;
+import de.jpx3.intave.module.test.ChestLootProvider;
 import de.jpx3.intave.module.tracker.player.PacketLogging;
 import de.jpx3.intave.player.DamageModify;
 import de.jpx3.intave.resource.Resource;
@@ -43,6 +52,7 @@ import de.jpx3.intave.user.MessageChannel;
 import de.jpx3.intave.user.User;
 import de.jpx3.intave.user.UserRepository;
 import de.jpx3.intave.user.meta.ConnectionMetadata;
+import de.jpx3.intave.user.meta.MovementMetadata;
 import de.jpx3.intave.user.meta.ProtocolMetadata;
 import de.jpx3.intave.user.meta.PunishmentMetadata;
 import de.jpx3.intave.user.storage.PlaytimeStorage;
@@ -105,6 +115,22 @@ public final class DiagnosticsStage extends CommandStage {
     return singletonInstance;
   }
 
+  @SubCommand(selectors = "branchfreq", usage = "", description = "Output branch frequency data", permission = "intave.command.diagnostics.performance")
+  public void branchfreq(User user) {
+    Map<String, Long> branchFrequency = user.meta().movement().branchFrequency;
+//    sort
+    List<Map.Entry<String, Long>> sortedEntries = new ArrayList<>(branchFrequency.entrySet());
+    sortedEntries.sort((a, b) -> Long.compare(b.getValue(), a.getValue()));
+
+    Player player = user.player();
+    player.sendMessage(ChatColor.GRAY + "Branch frequency distribution:");
+    for (Map.Entry<String, Long> entry : sortedEntries) {
+      String branchIdentifier = entry.getKey();
+      long count = entry.getValue();
+      player.sendMessage((count > 0 ? ChatColor.RED + "" + count : ChatColor.GRAY + "0") + ChatColor.GRAY + "x " + ChatColor.WHITE + branchIdentifier);
+    }
+  }
+
   @SubCommand(selectors = "environment", usage = "", description = "Dumps environment infos to a players chat", permission = "intave.command.diagnostics.performance")
   public void environment(CommandSender sender) {
     Player player = null;
@@ -118,7 +144,7 @@ public final class DiagnosticsStage extends CommandStage {
     } else {
       sender.sendMessage(ChatColor.GRAY + "Run this command in-game to display client version");
     }
-    String intaveVersion = IntavePlugin.version();
+    String intaveVersion = IntavePlugin.fullVersion();
     String serverVersion = Bukkit.getName() + "@" + Bukkit.getVersion();
     String protocolLibVersion = ProtocolLibrary.getPlugin().getDescription().getVersion();
     sender.sendMessage(ChatColor.GRAY + "Spigot is " + ChatColor.WHITE + serverVersion);
@@ -142,22 +168,16 @@ public final class DiagnosticsStage extends CommandStage {
     permission = "intave.command.diagnostics.performance"
   )
   public void nerfers(User user) {
-    if (IntaveControl.DISABLE_LICENSE_CHECK || IntaveControl.AUTHENTICATION_DEBUG_MODE) {
-      List<PunishmentMetadata.AttackNerfer> attackNerfers = user.meta().punishment().activeNerfers();
-      if (attackNerfers.isEmpty()) {
-        user.player().sendMessage(IntavePlugin.prefix() + ChatColor.RED + "No active nerfers");
-      } else {
-        user.player().sendMessage(IntavePlugin.prefix() + "Active nerfers: " + attackNerfers.stream().map(nerfer -> nerfer.strategy().typeName()).collect(Collectors.joining(", ")));
-      }
+    List<PunishmentMetadata.AttackNerfer> attackNerfers = user.meta().punishment().activeNerfers();
+    if (attackNerfers.isEmpty()) {
+      user.player().sendMessage(IntavePlugin.prefix() + ChatColor.RED + "No active nerfers");
     } else {
-      user.player().sendMessage(IntavePlugin.prefix() + ChatColor.RED + "Currently unavailable");
+      user.player().sendMessage(IntavePlugin.prefix() + "Active nerfers: " + attackNerfers.stream().map(nerfer -> nerfer.strategy().typeName()).collect(Collectors.joining(", ")));
     }
   }
 
   private enum Mode {
-    PHYSICS_EVAL("pxeval")
-
-    ;
+    PHYSICS_EVAL("pxeval");
 
     private String name;
 
@@ -200,20 +220,16 @@ public final class DiagnosticsStage extends CommandStage {
     permission = "intave.command.diagnostics.performance"
   )
   public void nerf(User user, String type) {
-    if (IntaveControl.DISABLE_LICENSE_CHECK || IntaveControl.AUTHENTICATION_DEBUG_MODE) {
-      try {
-        AttackNerfStrategy strategy = AttackNerfStrategy.byName(type);
-        if (strategy == null) {
-          user.player().sendMessage(IntavePlugin.prefix() + ChatColor.RED + "Invalid nerf type");
-          return;
-        }
-        user.nerfPermanently(strategy, "command");
-        user.player().sendMessage(IntavePlugin.prefix() + "Nerf " + strategy.typeName() + " applied");
-      } catch (Exception exception) {
+    try {
+      AttackNerfStrategy strategy = AttackNerfStrategy.byName(type);
+      if (strategy == null) {
         user.player().sendMessage(IntavePlugin.prefix() + ChatColor.RED + "Invalid nerf type");
+        return;
       }
-    } else {
-      user.player().sendMessage(IntavePlugin.prefix() + ChatColor.RED + "Currently unavailable");
+      user.nerfPermanently(strategy, "command");
+      user.player().sendMessage(IntavePlugin.prefix() + "Nerf " + strategy.typeName() + " applied");
+    } catch (Exception exception) {
+      user.player().sendMessage(IntavePlugin.prefix() + ChatColor.RED + "Invalid nerf type");
     }
   }
 
@@ -409,11 +425,6 @@ public final class DiagnosticsStage extends CommandStage {
   @SubCommand(selectors = "timings", usage = "", description = "Output timing data", permission = "intave.command.diagnostics.performance")
   public void timingsCommand(User user, @Optional String[] specifier) {
     Player player = user.player();
-    if (!IntaveControl.DISABLE_LICENSE_CHECK) {
-      player.sendMessage(IntavePlugin.prefix() + ChatColor.RED + "Currently unavailable");
-      return;
-    }
-
     String fullSpecifier = specifier != null ? Arrays.stream(specifier).map(s -> s + " ").collect(Collectors.joining()).trim().toLowerCase(Locale.ROOT) : "";
 
     player.sendMessage(ChatColor.RED + "Loading timings...");
@@ -498,7 +509,7 @@ public final class DiagnosticsStage extends CommandStage {
 
     vector.setX(vector.getX() * multiply);
 //    if (game.getSetting(GameSetting.MULTIPLY_Y_VELOCITY, false)) {
-      vector.setY(vector.getY() * multiply);
+    vector.setY(vector.getY() * multiply);
 //    }
     vector.setZ(vector.getZ() * multiply);
 
@@ -528,10 +539,6 @@ public final class DiagnosticsStage extends CommandStage {
     permission = "intave.command.diagnostics.performance"
   )
   public void resistanceCommand(User user) {
-    if (!IntaveControl.DISABLE_LICENSE_CHECK) {
-      user.player().sendMessage(IntavePlugin.prefix() + ChatColor.RED + "Currently unavailable");
-      return;
-    }
     Bukkit.getOnlinePlayers().forEach(player -> {
         player.addPotionEffect(new PotionEffect(PotionEffectType.DAMAGE_RESISTANCE, 999999, 100));
         player.addPotionEffect(new PotionEffect(PotionEffectType.SATURATION, 999999, 100));
@@ -548,6 +555,7 @@ public final class DiagnosticsStage extends CommandStage {
   )
   public void teleportSpam(User user) {
     Player player = user.player();
+    MovementMetadata movement = user.meta().movement();
     player.sendMessage(ChatColor.RED + "Logout to stop");
 
     int[] id = {0};
@@ -558,22 +566,22 @@ public final class DiagnosticsStage extends CommandStage {
       }
       int attempts = 100;
       BoundingBox playerBox = BoundingBox.fromPosition(
-        user, user.meta().movement(), player.getLocation()
+        user, movement, player.getLocation()
       );
       double moveX;
       do {
         moveX = ThreadLocalRandom.current().nextGaussian();
-      } while (Collision.present(player, playerBox.move(moveX, 0, 0)) && attempts-- > 0);
+      } while (Collision.present(user, movement, playerBox.move(moveX, 0, 0)) && attempts-- > 0);
       if (attempts <= 0) moveX = 0;
       attempts = 100;
       double moveY;
       do {
         moveY = ThreadLocalRandom.current().nextGaussian();
-      } while (Collision.present(player, playerBox.move(0, moveY, 0)) && attempts-- > 0);
+      } while (Collision.present(user, movement, playerBox.move(0, moveY, 0)) && attempts-- > 0);
       double moveZ;
       do {
         moveZ = ThreadLocalRandom.current().nextGaussian();
-      } while (Collision.present(player, playerBox.move(0, 0, moveZ)) && attempts-- > 0);
+      } while (Collision.present(user, movement, playerBox.move(0, 0, moveZ)) && attempts-- > 0);
       if (attempts <= 0) moveZ = 0;
       if (attempts <= 0) moveY = 0;
       player.teleport(player.getLocation().clone().add(moveX, moveY, moveZ));
@@ -582,6 +590,29 @@ public final class DiagnosticsStage extends CommandStage {
         player.sendMessage(IntavePlugin.prefix() + "Teleport to " + player.getLocation().getBlockX() + " " + player.getLocation().getBlockY() + " " + player.getLocation().getBlockZ() + " " + " as " + ChatColor.RED + " it was command-requested");
       }
     }, 20, 3);
+  }
+
+  @SubCommand(
+    selectors = "velocityspam",
+    usage = "",
+    description = ""
+  )
+  public void velocitySpam(User user) {
+    Player player = user.player();
+    player.sendMessage(ChatColor.RED + "Logout to stop");
+
+    int[] id = {0};
+    id[0] = Bukkit.getScheduler().scheduleSyncRepeatingTask(plugin, () -> {
+      if (!player.isOnline()) {
+        Bukkit.getScheduler().cancelTask(id[0]);
+        return;
+      }
+      player.setVelocity(new Vector(
+        ThreadLocalRandom.current().nextGaussian() * 0.2,
+        0.3,
+        ThreadLocalRandom.current().nextGaussian() * 0.2
+      ));
+    }, 20, 20 * 2);
   }
 
   @SubCommand(
@@ -775,7 +806,7 @@ public final class DiagnosticsStage extends CommandStage {
       PrintStream printStream = new PrintStream(stream);
       printStream.println("Static environment");
       printStream.println(" Time: " + LocalDateTime.now().format(MESSAGE_DATE_FORMATTER));
-      printStream.println(" Intave: " + IntavePlugin.version());
+      printStream.println(" Intave: " + IntavePlugin.fullVersion());
       printStream.println(" ProtocolLib: " + Bukkit.getPluginManager().getPlugin("ProtocolLib").getDescription().getVersion());
       if (Bukkit.getPluginManager().getPlugin("ViaVersion") != null) {
         printStream.println(" ViaVersion: " + Bukkit.getPluginManager().getPlugin("ViaVersion").getDescription().getVersion());
@@ -783,7 +814,7 @@ public final class DiagnosticsStage extends CommandStage {
         printStream.println(" ViaVersion not present");
       }
       printStream.println(" Server: "/* + Bukkit.getServerName() + "/"*/ + Bukkit.getVersion() + "/" + Bukkit.getBukkitVersion());
-      printStream.println(" Minecraft: " + MinecraftVersion.getCurrentVersion().toString());
+      printStream.println(" Minecraft: " + MinecraftVersion.current().toString());
       printStream.println("Players");
       printStream.println(" Thread dump creator: " + sender.getName());
       printStream.println(" Players online: " + Bukkit.getOnlinePlayers().size() + "/" + Bukkit.getOnlinePlayers().stream().map(Player::getName).collect(Collectors.toList()));
@@ -920,10 +951,6 @@ public final class DiagnosticsStage extends CommandStage {
     ChestLootProvider provider = Modules.find(ChestLootProvider.class);
     if (!user.player().isOp()) {
       user.player().sendMessage(IntavePlugin.prefix() + ChatColor.RED + "You need to be op to use this command");
-      return;
-    }
-    if (!IntaveControl.DISABLE_LICENSE_CHECK) {
-      user.player().sendMessage(IntavePlugin.prefix() + ChatColor.RED + "Not available in production");
       return;
     }
     provider.openLootChestCommand(user.player());

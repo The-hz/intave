@@ -1,8 +1,18 @@
+/*
+ * Copyright 2026 Intave
+ *
+ * This software is licensed under the PolyForm Perimeter License 1.0.0.
+ * You may use this software for any purpose, except for providing to
+ * others any product that competes with the software.
+ *
+ * A copy of the license is available at:
+ *   https://polyformproject.org/licenses/perimeter/1.0.0/
+ */
+
 package de.jpx3.intave.adapter;
 
 import com.comphenix.protocol.ProtocolLibrary;
 import com.comphenix.protocol.ProtocolManager;
-import de.jpx3.intave.IntaveControl;
 import de.jpx3.intave.IntavePlugin;
 import de.jpx3.intave.access.IntaveInternalException;
 import de.jpx3.intave.connect.IntaveDomains;
@@ -32,7 +42,10 @@ public final class ComponentLoader {
   }
 
   public void prepareComponents() {
-    if (Bukkit.getVersion().contains("MC: 1.19") || Bukkit.getVersion().contains("MC: 1.20") || Bukkit.getVersion().contains("MC: 1.21")) {
+    String version = Bukkit.getVersion();
+    if (version.contains("MC: 1.21.11") || version.contains("MC: 1.21.10") || version.contains("MC: 26.1") || version.contains("MC: 26.2")) {
+      essentialComponents.put("ProtocolLib", "https://github.com/dmulloy2/ProtocolLib/releases/download/dev-build/ProtocolLib.jar");
+    } else if (version.contains("MC: 1.19") || version.contains("MC: 1.20") || version.contains("MC: 1.21")) {
       essentialComponents.put("ProtocolLib", "https://github.com/dmulloy2/ProtocolLib/releases/download/5.4.0/ProtocolLib.jar");
     } else {
       essentialComponents.put("ProtocolLib", "https://" + IntaveDomains.primaryServiceDomain() + "/resource/ProtocolLib-4-8-0.jar");
@@ -42,9 +55,7 @@ public final class ComponentLoader {
   public void loadComponents() {
     for (String component : essentialComponents.keySet()) {
       try {
-        if (!loadComponent(component)) {
-          return;
-        }
+	      loadComponent(component);
       } catch (Exception exception) {
         throw new IntaveInternalException("Unable to load library " + component, exception);
       }
@@ -80,13 +91,14 @@ public final class ComponentLoader {
       download(in, componentPluginFile.toPath());
       plugin.logger().info(ChatColor.GREEN + "Downloaded " + componentName);
       Plugin componentPlugin = this.plugin.getServer().getPluginManager().loadPlugin(componentPluginFile);
-      ProtocolManager protocolManager = ProtocolLibrary.getProtocolManager();
-      if (protocolManager == null) {
-        try {
+
+      try {
+        ProtocolManager protocolManager = ProtocolLibrary.getProtocolManager();
+        if (protocolManager == null) {
           componentPlugin.onLoad();
-        } catch (Throwable throwable) {
-          // ProtocolLib Moment
         }
+      } catch (Throwable throwable) {
+        // ProtocolLib Moment
       }
       this.plugin.getServer().getPluginManager().enablePlugin(componentPlugin);
     }

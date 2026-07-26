@@ -1,3 +1,14 @@
+/*
+ * Copyright 2026 Intave
+ *
+ * This software is licensed under the PolyForm Perimeter License 1.0.0.
+ * You may use this software for any purpose, except for providing to
+ * others any product that competes with the software.
+ *
+ * A copy of the license is available at:
+ *   https://polyformproject.org/licenses/perimeter/1.0.0/
+ */
+
 package de.jpx3.intave.module.dispatch;
 
 import com.comphenix.protocol.PacketType;
@@ -6,16 +17,14 @@ import com.comphenix.protocol.ProtocolManager;
 import com.comphenix.protocol.events.PacketContainer;
 import com.comphenix.protocol.events.PacketEvent;
 import com.comphenix.protocol.reflect.StructureModifier;
-import com.comphenix.protocol.wrappers.BlockPosition;
-import com.comphenix.protocol.wrappers.BukkitConverters;
 import com.comphenix.protocol.wrappers.EnumWrappers;
 import de.jpx3.intave.IntaveControl;
 import de.jpx3.intave.IntavePlugin;
 import de.jpx3.intave.access.player.trust.TrustFactor;
 import de.jpx3.intave.adapter.MinecraftVersions;
-import de.jpx3.intave.annotate.Nullable;
 import de.jpx3.intave.block.access.VolatileBlockAccess;
 import de.jpx3.intave.block.collision.Collision;
+import de.jpx3.intave.block.collision.custom.BedWakeupPositionSearch;
 import de.jpx3.intave.block.shape.BlockShape;
 import de.jpx3.intave.block.shape.BlockShapes;
 import de.jpx3.intave.block.tick.ShulkerBox;
@@ -24,14 +33,15 @@ import de.jpx3.intave.block.variant.BlockVariant;
 import de.jpx3.intave.check.CheckService;
 import de.jpx3.intave.check.movement.Physics;
 import de.jpx3.intave.check.movement.Timer;
-import de.jpx3.intave.check.movement.physics.Pose;
+import de.jpx3.intave.check.movement.physics.environment.Pose;
+import de.jpx3.intave.check.movement.physics.update.MotionAddUpdate;
+import de.jpx3.intave.check.movement.physics.update.MotionSetUpdate;
 import de.jpx3.intave.check.world.InteractionRaytrace;
 import de.jpx3.intave.executor.Synchronizer;
 import de.jpx3.intave.math.Hypot;
 import de.jpx3.intave.math.MathHelper;
 import de.jpx3.intave.module.Module;
 import de.jpx3.intave.module.Modules;
-import de.jpx3.intave.module.feedback.Superposition;
 import de.jpx3.intave.module.linker.bukkit.BukkitEventSubscription;
 import de.jpx3.intave.module.linker.packet.Engine;
 import de.jpx3.intave.module.linker.packet.ListenerPriority;
@@ -42,7 +52,9 @@ import de.jpx3.intave.module.tracker.entity.Entity;
 import de.jpx3.intave.module.tracker.player.PacketLogging;
 import de.jpx3.intave.module.violation.Violation;
 import de.jpx3.intave.packet.PacketSender;
+import de.jpx3.intave.packet.converter.InputConverter;
 import de.jpx3.intave.packet.reader.*;
+import de.jpx3.intave.player.ActionBar;
 import de.jpx3.intave.player.FaultKicks;
 import de.jpx3.intave.player.ItemProperties;
 import de.jpx3.intave.player.fake.FakePlayer;
@@ -51,22 +63,27 @@ import de.jpx3.intave.user.MessageChannel;
 import de.jpx3.intave.user.User;
 import de.jpx3.intave.user.UserRepository;
 import de.jpx3.intave.user.meta.*;
+import de.jpx3.intave.world.Particles;
 import de.jpx3.intave.world.WorldHeight;
-import org.bukkit.*;
+import de.jpx3.intave.world.border.WorldBorder;
+import org.bukkit.ChatColor;
+import org.bukkit.Location;
+import org.bukkit.Material;
+import org.bukkit.World;
 import org.bukkit.entity.Player;
 import org.bukkit.event.Cancellable;
 import org.bukkit.event.EventPriority;
-import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.player.PlayerChangedWorldEvent;
 import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
-import org.bukkit.util.Vector;
 
 import java.util.*;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 import static de.jpx3.intave.IntaveControl.DEBUG_MOVEMENT_IGNORE;
+import static de.jpx3.intave.check.movement.physics.environment.MoveMetric.*;
 import static de.jpx3.intave.math.MathHelper.formatDouble;
 import static de.jpx3.intave.module.feedback.FeedbackOptions.SELF_SYNCHRONIZATION;
 import static de.jpx3.intave.module.linker.packet.PacketId.Client.*;
@@ -78,10 +95,8 @@ import static de.jpx3.intave.user.meta.ProtocolMetadata.VER_1_16;
 import static de.jpx3.intave.user.meta.ProtocolMetadata.VER_1_9;
 
 public final class MovementDispatcher extends Module {
-  private final static boolean NEW_EXPLOSION = MinecraftVersions.VER1_21_3.atOrAbove();
-  private static final boolean ELYTRA_SUPPORTED = MinecraftVersions.VER1_9_0.atOrAbove();
-  private TeleportApplyEnforcer teleportApplyEnforcer;
   private Physics physicsCheck;
+  private TeleportController teleportController;
   private InteractionRaytrace interactionRaytraceCheck;
   private Timer timerCheck;
 
@@ -91,8 +106,8 @@ public final class MovementDispatcher extends Module {
     this.physicsCheck = checks.searchCheck(Physics.class);
     this.interactionRaytraceCheck = checks.searchCheck(InteractionRaytrace.class);
     this.timerCheck = checks.searchCheck(Timer.class);
-    this.teleportApplyEnforcer = new TeleportApplyEnforcer();
-    this.teleportApplyEnforcer.setup();
+    this.teleportController = new TeleportController();
+    this.teleportController.setup();
   }
 
   @BukkitEventSubscription(
@@ -157,6 +172,13 @@ public final class MovementDispatcher extends Module {
     if (location == null) {
       return null;
     }
+    boolean inLoadedChunk = VolatileBlockAccess.isInLoadedChunk(
+      location.getWorld(), location.getBlockX(), location.getBlockZ()
+    );
+    if (!inLoadedChunk) {
+      return location;
+    }
+
     MovementMetadata movement = user.meta().movement();
     int baseShifts = BASE_SHIFTS;
     Location fixedLocation = location.clone();
@@ -183,8 +205,6 @@ public final class MovementDispatcher extends Module {
   public void receiveWorldChange(PlayerChangedWorldEvent event) {
     Player player = event.getPlayer();
     User user = UserRepository.userOf(player);
-    MovementMetadata movementData = user.meta().movement();
-    movementData.updateWorld();
     user.blockCache().invalidateAll();
     user.refreshSprintState();
   }
@@ -212,7 +232,7 @@ public final class MovementDispatcher extends Module {
     movementData.lastRotationYaw = movementData.rotationYaw;
     movementData.lastRotationPitch = movementData.rotationPitch;
     movementData.rotationYaw = location.getYaw();
-    movementData.rotationPitch = location.getPitch();
+//    movementData.rotationPitch = location.getPitch();
   }
 
   @PacketSubscription(
@@ -232,8 +252,6 @@ public final class MovementDispatcher extends Module {
   }
 
   private void synchronizeRespawn(Player player) {
-//    Modules.feedback()
-//      .synchronize(player, UserRepository.userOf(player), (p, user) -> {
     User user = UserRepository.userOf(player);
     user.tickFeedback(() -> {
       MetadataBundle meta = user.meta();
@@ -241,41 +259,19 @@ public final class MovementDispatcher extends Module {
       ProtocolMetadata protocol = meta.protocol();
       InventoryMetadata inventory = meta.inventory();
       movement.sneaking = false;
+      movement.sleepingBedPosition = null;
       movement.setSprinting(false);
       if (protocol.protocolVersion() >= VER_1_16) {
-        movement.sprintReset();
         user.refreshSprintState();
       }
       Synchronizer.synchronize(inventory::releaseItemNextTick);
       movement.baseMotionX = 0;
       movement.baseMotionY = 0;
       movement.baseMotionZ = 0;
+      movement.clearPostTickMotionCandidates();
       user.blockCache().invalidateAll();
       meta.potions().clearPotionEffects();
     });
-  }
-
-  @PacketSubscription(
-    priority = ListenerPriority.HIGH,
-    packetsOut = {
-      EXPLOSION
-    }
-  )
-  public void sentExplosion(PacketEvent event) {
-    Player player = event.getPlayer();
-    User user = UserRepository.userOf(player);
-    Motion knockback = readExplosionMotion(event);
-    if (knockback != null) {
-      user.packetTickFeedback(event, () -> {
-        if (IntaveControl.DEBUG_VELOCITY_RECEIVE) {
-          player.sendMessage("§a" + MathHelper.formatMotion(knockback));
-        }
-        MovementMetadata movementData = user.meta().movement();
-        movementData.baseMotionX += knockback.motionX;
-        movementData.baseMotionY += knockback.motionY;
-        movementData.baseMotionZ += knockback.motionZ;
-      });
-    }
   }
 
   @PacketSubscription(
@@ -294,9 +290,11 @@ public final class MovementDispatcher extends Module {
     }
 
     PacketContainer packet = event.getPacket();
+    PlayerMoveReader reader = PacketReaders.readerOf(packet);
+
     User user = UserRepository.userOf(player);
     MetadataBundle meta = user.meta();
-    MovementMetadata movementData = meta.movement();
+    MovementMetadata movement = meta.movement();
     AttackMetadata attackData = meta.attack();
     InventoryMetadata inventoryData = meta.inventory();
     ViolationMetadata violationLevelData = meta.violationLevel();
@@ -305,95 +303,77 @@ public final class MovementDispatcher extends Module {
 
     PacketType packetType = event.getPacketType();
     boolean vehicleMove = packetType == PacketType.Play.Client.VEHICLE_MOVE;
-    boolean containsCollision = MinecraftVersions.VER1_21_3.atOrAbove();
-    boolean hasMovement = vehicleMove || packet.getBooleans().read(containsCollision ? 2 : 1);
-    boolean hasRotation = vehicleMove || packet.getBooleans().read(containsCollision ? 3 : 2);
+	  boolean hasMovement = reader.hasMovement();
+    boolean hasRotation = reader.hasRotation();
 
-    if (movementData.isInVehicle() && !vehicleMove && hasRotation && !hasMovement) {
-      movementData.applyGroundInformationToPacket(packet);
-      movementData.rotationYaw = packet.getFloat().read(0);
-      movementData.rotationPitch = packet.getFloat().read(1);
+    if (movement.isInVehicle() && !vehicleMove && hasRotation && !hasMovement) {
+      movement.setRotation(reader.yaw(), reader.pitch());
       logging.logSystemMessage(user, () -> "MOVEMENT IGNORED: Vehicle rotation only");
+      reader.release();
       return;
     }
 
+    /**
+     * The vehicle move only contains the boat rotation, which is incorrect.
+     * We do receive a simple player look packet before the vehicle move, so we simply rely on that.
+     */
+    if (vehicleMove) {
+      hasRotation = false;
+    }
+
     boolean clientVehicleMovement = MinecraftVersions.VER1_9_0.atOrAbove() && protocol.combatUpdate();
-    if (movementData.isInRidingVehicle() && !vehicleMove && clientVehicleMovement && !movementData.awaitTeleport) {
-      movementData.dismountRidingEntity("Client vehicle movement");
+    if (movement.isInRidingVehicle() && !vehicleMove && clientVehicleMovement && !movement.awaitTeleport) {
+      movement.dismountRidingEntity("Client vehicle movement");
     }
 
-    if (movementData.isInRidingVehicle() && !vehicleMove && hasMovement) {
-      if (movementData.invalidVehiclePositionTicks++ > 10) {
-        movementData.dismountRidingEntity("Lower client vehicle movement");
+    if (movement.isInRidingVehicle() && !vehicleMove && hasMovement) {
+      if (movement.invalidVehiclePositionTicks++ > 10) {
+        movement.dismountRidingEntity("Lower client vehicle movement");
       }
     }
 
-    if (hasMovement) {
-      StructureModifier<Double> modifier = packet.getDoubles();
-      if (MinecraftVersions.VER1_21_4.atOrAbove() && vehicleMove) {
-        modifier = packet.getStructures().read(0).getDoubles();
-      }
-      for (int i = 0; i < 3; i++) {
-        Double read = modifier.read(i);
-        if ((read == null || Double.isInfinite(read) || Double.isNaN(read)) && FaultKicks.POSITION_FAULTS) {
-          user.kick("Intolerable position fault");
-          return;
-        }
-      }
+    if (reader.anyNaNOrInfiniteValue() && FaultKicks.POSITION_FAULTS) {
+      user.kick("NaN/infinite in server-bound movement packet");
+      return;
     }
 
-    if (hasRotation) {
-      StructureModifier<Float> modifier = packet.getFloat();
-      for (int i = 0; i < 2; i++) {
-        Float read = modifier.read(i);
-        if ((read == null || Double.isInfinite(read) || Double.isNaN(read)) && FaultKicks.POSITION_FAULTS) {
-          user.kick("Intolerable position fault");
-          return;
-        }
-      }
-    }
-
-    if (hasMovement || movementData.isInVehicle() || movementData.inRespawnScreen) {
-      movementData.lastPositionUpdate = 0;
-    } else if (++movementData.lastPositionUpdate > 20 && FaultKicks.MISSING_POSITION_UPDATE && !user.justJoined() && !user.trustFactor().atLeast(TrustFactor.BYPASS)) {
-      user.kick("Missing position update " + movementData.vehicle());
+    if (hasMovement || movement.isInVehicle() || movement.inRespawnScreen) {
+      movement.lastPositionUpdate = 0;
+    } else if (++movement.lastPositionUpdate > 20 && FaultKicks.MISSING_POSITION_UPDATE && !user.justJoined() && !user.trustFactor().atLeast(TrustFactor.BYPASS)) {
+      user.kick("Missing position update " + movement.vehicle());
     }
 
     // fix only works for 1.8
-    if (movementData.sprinting && movementData.isSneaking() && movementData.lastSneaking && !protocol.combatUpdate() && movementData.acceptSneakFaults && FaultKicks.INVALID_PLAYER_ACTION && !user.justJoined() && !user.trustFactor().atLeast(TrustFactor.BYPASS)) {
-      movementData.acceptSneakFaults = false;
+    if (movement.sprinting && movement.isSneaking() && movement.lastSneaking && !protocol.combatUpdate() && movement.acceptSneakFaults && FaultKicks.INVALID_PLAYER_ACTION && !user.justJoined() && !user.trustFactor().atLeast(TrustFactor.BYPASS)) {
+      movement.acceptSneakFaults = false;
       user.refreshSprintState(unused -> {
-        movementData.sprintSneakFaults++;
-        movementData.acceptSneakFaults = true;
+        movement.sprintSneakFaults++;
+        movement.acceptSneakFaults = true;
       });
-      if (movementData.sprintSneakFaults > 1) {
+      if (movement.sprintSneakFaults > 1) {
         user.kick("Repeated player action faults");
       }
     }
 
     // see MultiPlayerGameMode#useItem
-    if (protocol.cavesAndCliffsUpdate() && !movementData.awaitTeleport
+    if (protocol.useItemMovementPacket() && !movement.awaitTeleport
       && packet.getType() == PacketType.Play.Client.POSITION_LOOK
     ) {
-      StructureModifier<Double> modifier = packet.getDoubles();
-      if (MinecraftVersions.VER1_21_4.atOrAbove() && vehicleMove) {
-        modifier = packet.getStructures().read(0).getDoubles();
-      }
-      double positionX = modifier.read(0);
-      double positionY = modifier.read(1);
-      double positionZ = modifier.read(2);
-      double motionX = positionX - movementData.verifiedPositionX;
-      double motionY = positionY - movementData.verifiedPositionY;
-      double motionZ = positionZ - movementData.verifiedPositionZ;
+      double positionX = reader.positionX();
+      double positionY = reader.positionY();
+      double positionZ = reader.positionZ();
+      double motionX = positionX - movement.verifiedLastPositionX;
+      double motionY = positionY - movement.verifiedLastPositionY;
+      double motionZ = positionZ - movement.verifiedLastPositionZ;
       double distance = MathHelper.hypot3d(motionX, motionY, motionZ);
 
       if (distance < 0.00001) {
-        movementData.dropPostTickMotionProcessing = true;
+        movement.dropPostTickMotionProcessing = true;
         Float yaw = packet.getFloat().read(0);
         Float pitch = packet.getFloat().read(1);
         if (DEBUG_MOVEMENT_IGNORE) {
-          double yawDifference = MathHelper.noAbsDistanceInDegrees(movementData.lastRotationYaw, yaw);
-          double pitchDifference = MathHelper.noAbsDistanceInDegrees(movementData.lastRotationPitch, pitch);
+          double yawDifference = MathHelper.noAbsDistanceInDegrees(movement.lastRotationYaw, yaw);
+          double pitchDifference = MathHelper.noAbsDistanceInDegrees(movement.lastRotationPitch, pitch);
           System.out.println("[Intave] Click movement ignore distance: " + distance + " yaw: " + yawDifference + " pitch: " + pitchDifference);
           IntavePlugin.singletonInstance().logTransmittor().addPlayerLog(player, "(DEBUG/MOVEMENTIGNORE) Click movement ignore distance: " + distance + " yaw: " + yawDifference + " pitch: " + pitchDifference);
         }
@@ -402,87 +382,90 @@ public final class MovementDispatcher extends Module {
         if (!MinecraftVersions.VER1_9_0.atOrAbove()) {
           event.setCancelled(true);
         } else {
-          modifier.write(0, movementData.verifiedPositionX);
-          modifier.write(1, movementData.verifiedPositionY);
-          modifier.write(2, movementData.verifiedPositionZ);
+          reader.setPosition(movement.verifiedLastPosition());
         }
+        reader.release();
         return;
       }
     }
-    movementData.awaitClickMovementSkip = false;
+    movement.awaitClickMovementSkip = false;
 
     if (user.receives(MessageChannel.DEBUG_POSITION)) {
-      player.sendMessage("intave:" + formatDouble(movementData.positionY, 2) + " server:" + formatDouble(player.getLocation().getY(), 2));
+      ActionBar.sendActionBar(player, "intave:" + formatDouble(movement.positionY, 2) + " server:" + formatDouble(player.getLocation().getY(), 2));
     }
 
     connectionData.receiveMovement();
-    movementData.updateMovement(packet, hasMovement, hasRotation);
-    teleportApplyEnforcer.receiveMovement(event);
+    movement.updateMovement(
+      reader.positionX(), reader.positionY(), reader.positionZ(),
+      reader.yaw(), reader.pitch(),
+      hasMovement, hasRotation
+    );
+    inventoryData.updateSlotSwitch();
 
-    if (IntaveControl.DEBUG_COLLISION_BOXES) {
-      BoundingBox box = movementData.boundingBox().grow(0.1);
-      BlockShape shape = Collision.shape(player, box);
-      List<BoundingBox> boundingBoxes = shape.boundingBoxes();
-      boundingBoxes = BlockShapes.mergeBoxes(boundingBoxes).boundingBoxes();
-      drawDebugBoxes(user, boundingBoxes);
+    if (hasMovement) {
+      logging.logSystemMessage(user, () -> "MOTION LOGIC: Received motion: " + movement.sentOffsetMotion());
     }
 
-    for (Superposition<?> superposition : movementData.superpositions()) {
-      superposition.beginTick();
-    }
-    for (Superposition<?> superposition : movementData.superpositions()) {
-      superposition.computeVariations();
+    teleportController.receiveMovement(event);
+
+    if (IntaveControl.DEBUG_COLLISION_BOXES || user.receives(MessageChannel.DEBUG_COLLISIONS)) {
+      BoundingBox box = movement.boundingBox().grow(0.1);
+      BlockShape shape = Collision.shape(user, movement, box);
+      drawDebugBoxes(user, BlockShapes.optimize(shape).elementaryBoxes());
     }
 
-    if (movementData.awaitTeleport || movementData.awaitOutgoingTeleport) {
+    if (user.receives(MessageChannel.DEBUG_HITBOX)) {
+      for (Position vertex : movement.boundingBox().vertices()) {
+        Particles.spawnVillagerHappyParticleAt(user, vertex);
+      }
+    }
+
+    if (movement.awaitTeleport || movement.awaitOutgoingTeleport) {
       if (DEBUG_MOVEMENT_IGNORE) {
-        System.out.println("[Intave] Teleport movement ignore " + movementData.awaitTeleport + " " + movementData.awaitOutgoingTeleport);
-        IntavePlugin.singletonInstance().logTransmittor().addPlayerLog(player, "(DEBUG/MOVEMENTIGNORE) Teleport movement ignore " + movementData.awaitTeleport + " " + movementData.awaitOutgoingTeleport);
+        System.out.println("[Intave] Teleport movement ignore " + movement.awaitTeleport + " " + movement.awaitOutgoingTeleport);
+        IntavePlugin.singletonInstance().logTransmittor().addPlayerLog(player, "(DEBUG/MOVEMENTIGNORE) Teleport movement ignore " + movement.awaitTeleport + " " + movement.awaitOutgoingTeleport);
       }
       event.setCancelled(true);
-      movementData.dropPostTickMotionProcessing = true;
-      logging.logSystemMessage(user, () -> "MOVEMENT IGNORED: Teleport movement ignore " + movementData.awaitTeleport + " " + movementData.awaitOutgoingTeleport);
+      movement.dropPostTickMotionProcessing = true;
+      logging.logSystemMessage(user, () -> "MOVEMENT IGNORED: Teleport movement ignore " + movement.awaitTeleport + " " + movement.awaitOutgoingTeleport);
+      reader.release();
       return;
     }
 
-    double distance = MathHelper.distanceOf(
-      movementData.verifiedPositionX, movementData.verifiedPositionY, movementData.verifiedPositionZ,
-      movementData.positionX, movementData.positionY, movementData.positionZ
-    );
+    double distance = movement.verifiedLastPosition().distance(movement.position());
 
     if (distance > 50) {
       if (DEBUG_MOVEMENT_IGNORE) {
-//        player.sendMessage("Distance movement ignore: " + distance);
         System.out.println("[Intave] Distance movement ignore: " + distance);
         IntavePlugin.singletonInstance().logTransmittor().addPlayerLog(player, "(DEBUG/MOVEMENTIGNORE) Distance movement ignore: " + distance);
       }
       logging.logSystemMessage(user, () -> "MOVEMENT REJECTED: Distance over limit: " + distance);
-      movementData.dropPostTickMotionProcessing = true;
+      movement.dropPostTickMotionProcessing = true;
       event.setCancelled(true);
-      Vector vector = new Vector(movementData.baseMotionX, movementData.baseMotionY, movementData.baseMotionZ);
-      Modules.mitigate().movement().emulationSetBack(player, vector, 10, false);
+      Modules.mitigate().movement().emulationSetBack(player, movement.mutableBaseMotionCopy(), 10, false);
       String message = "sent unsafe position";
       String details = "moved " + MathHelper.formatDouble(distance, 2) + " blocks";
       Map<String, String> granulars = new HashMap<>();
       granulars.put("DIST", MathHelper.formatDouble(distance, 2));
-      granulars.put("FROM", movementData.verifiedPositionX + " " + movementData.verifiedPositionY + " " + movementData.verifiedPositionZ);
-      granulars.put("FROM_ORIGIN", movementData.verifiedPositionOrigin);
-      granulars.put("TO", movementData.positionX + " " + movementData.positionY + " " + movementData.positionZ);
-      granulars.put("MOTION", movementData.baseMotionX + " " + movementData.baseMotionY + " " + movementData.baseMotionZ);
+      granulars.put("FROM", movement.verifiedLastPositionX + " " + movement.verifiedLastPositionY + " " + movement.verifiedLastPositionZ);
+      granulars.put("FROM_ORIGIN", movement.verifiedPositionOrigin);
+      granulars.put("TO", movement.positionX + " " + movement.positionY + " " + movement.positionZ);
+      granulars.put("MOTION", movement.baseMotionX + " " + movement.baseMotionY + " " + movement.baseMotionZ);
       Violation violation = Violation.builderFor(Physics.class)
         .forPlayer(player).withMessage(message).withDetails(details)
         .withGranulars(granulars).withVL(25).build();
       Modules.violationProcessor().processViolation(violation);
+      reader.release();
       return;
     }
 
-    Entity attachedEntity = movementData.ridingEntity();
+    Entity attachedEntity = movement.ridingEntity();
     if (attachedEntity != null && !attachedEntity.isEntityAlive()
       && attachedEntity.hasTypeData() && attachedEntity.typeData().isLivingEntity()) {
-      movementData.dismountRidingEntity("Riding dead entity");
+      movement.dismountRidingEntity("Riding dead entity");
     }
 
-    double distanceMoved = Hypot.fast(movementData.motionX(), movementData.motionZ());
+    double distanceMoved = Hypot.fast(movement.offsetMotionX(), movement.offsetMotionZ());
     if (inventoryData.activatedItemThisTick && inventoryData.deactivatedItemThisTick && distanceMoved > 0.1) {
       if (violationLevelData.wrappedNoSlowdownVL++ > 5) {
         user.nerfPermanently(AttackNerfStrategy.DMG_HIGH, "No slowdown");
@@ -511,136 +494,87 @@ public final class MovementDispatcher extends Module {
         IntavePlugin.singletonInstance().logTransmittor().addPlayerLog(player, "(DEBUG/MOVEMENTIGNORE) Teleport bundle movement ignore");
       }
       logging.logSystemMessage(user, () -> "MOVEMENT IGNORED: Teleport bundle movement ignore");
-      movementData.dropPostTickMotionProcessing = true;
+      movement.dropPostTickMotionProcessing = true;
       event.setCancelled(true);
+      reader.release();
       return;
     }
 
-    if (!movementData.isTeleportConfirmationPacket &&
-      movementData.canResetMotion &&
-      movementData.baseMotionX == 0 &&
-      movementData.baseMotionY == 0 &&
-      movementData.baseMotionZ == 0 &&
-      movementData.motionX() == 0 &&
-      movementData.motionY() == 0 &&
-      movementData.motionZ() == 0
+    if (!movement.isTeleportConfirmationPacket &&
+      movement.canResetMotion &&
+      movement.mutableBaseMotionCopy().isZero() &&
+      movement.sentOffsetMotion().isZero()
     ) {
       if (DEBUG_MOVEMENT_IGNORE) {
         System.out.println("[Intave] Movement reset ignore");
         IntavePlugin.singletonInstance().logTransmittor().addPlayerLog(player, "(DEBUG/MOVEMENTIGNORE) Movement reset ignore");
       }
       logging.logSystemMessage(user, () -> "MOVEMENT IGNORED: Movement reset ignore");
-      movementData.canResetMotion = false;
+      movement.canResetMotion = false;
+      reader.release();
       return;
     }
 
-    if (!connectionData.nextFeedbackSubscribers.isEmpty()) {
-      connectionData.movementPassedForNFS = true;
-    }
-
-    if (!movementData.isTeleportConfirmationPacket) {
+    if (!movement.isTeleportConfirmationPacket) {
       timerCheck.receiveMovement(event);
       if (interactionRaytraceCheck.receiveMovement(event)) {
-        movementData.compileSpecialBlocks();
-        movementData.recheckWebStateFromLastTick();
+        movement.compileSpecialBlocks();
+        movement.recheckWebStateFromLastTick();
       }
 
       // I have neither the time nor the energy for a proper fix
-      if (movementData.motion().length() > 0.5 && movementData.detachVehicleTicks < 2) {
-        movementData.setBaseMotionX(0);
-        movementData.setBaseMotionY(0);
-        movementData.setBaseMotionZ(0);
-        movementData.physicsResetMotionX = true;
-        movementData.physicsResetMotionZ = true;
+      if (movement.sentOffsetMotion().length() > 0.5 && movement.ticksPast(VEHICLE_DETACHMENT) < 2) {
+        movement.setBaseMotion(Motion.newEmpty());
+        movement.physicsResetMotionX = true;
+        movement.physicsResetMotionZ = true;
       }
 
-      if (hasMovement || hasRotation) {
-        physicsCheck.receiveMovement(user, hasMovement, hasRotation);
-      } else {
+      physicsCheck.receiveMovement(user, hasMovement, hasRotation);
+      if (!hasMovement && !hasRotation && !movement.treatThisFlyPacketAsMovePacket) {
         logging.logSystemMessage(user, () -> "MOVEMENT IGNORED: No movement or rotation");
-        physicsCheck.updateOnGroundIfFlying(user);
       }
 
-      boolean clientOnGround = vehicleMove ? player.isOnGround() : packet.getBooleans().read(0);
-      boolean collidedWithBoat = movementData.collidedWithBoat();
+      boolean clientOnGround = vehicleMove ? player.isOnGround() : reader.onGround();
+      boolean collidedWithBoat = movement.collidedWithBoat();
 
-      if (!vehicleMove && !collidedWithBoat) {
-//        movementData.applyGroundInformationToPacket(packet);
-      }
-
-      if (movementData.onGround && !clientOnGround && movementData.step) {
-        movementData.onGround = false;
+      if (movement.onGround && !clientOnGround && movement.step) {
+        movement.onGround = false;
       }
 
       if (collidedWithBoat) {
-        movementData.onGround = clientOnGround;
+        movement.onGround = clientOnGround;
       }
 
       attackData.updatePerfectRotation();
 
-/*      if (inventoryData.awaitingSlotSet != -1) {
-        Synchronizer.synchronize(() -> {
-          int awaitingSlotSet = inventoryData.awaitingSlotSet;
-          if (awaitingSlotSet != -1) {
-            player.getInventory().setHeldItemSlot(awaitingSlotSet);
-            inventoryData.awaitingSlotSet = -1;
-          }
-        });
-      }*/
       updatePotionEffects(user);
-      movementData.canResetMotion = false;
+      movement.canResetMotion = false;
     } else {
       if (DEBUG_MOVEMENT_IGNORE) {
-//        player.sendMessage("Basic reset movement ignore");
         System.out.println("[Intave] Basic reset movement ignore");
         IntavePlugin.singletonInstance().logTransmittor().addPlayerLog(player, "(DEBUG/MOVEMENTIGNORE) Basic reset movement ignore");
       }
-      movementData.canResetMotion = true;
+      movement.canResetMotion = true;
     }
 
     // flag & setback -> remove packet
-    if (movementData.invalidMovement && violationLevelData.isInActiveTeleportBundle) {
-      if (!movementData.awaitOutgoingTeleport) {
-        movementData.outgoingTeleportCountdown = 5;
+    if (movement.invalidMovement && violationLevelData.isInActiveTeleportBundle) {
+      if (!movement.awaitOutgoingTeleport) {
+        movement.outgoingTeleportCountdown = 5;
       }
-      movementData.awaitOutgoingTeleport = true; // awaiting next teleport
+      movement.awaitOutgoingTeleport = true; // awaiting next teleport
       event.setCancelled(true);
     }
+
+    reader.release();
   }
 
   private void drawDebugBoxes(User user, List<BoundingBox> boxes) {
-    if (IntaveControl.DEBUG_COLLISION_BOXES && MinecraftVersions.VER1_13_0.atOrAbove()) {
-      boxes
-        .stream()
-        .flatMap(box -> box.vertices().stream())
-        .distinct()
-        .forEach(position -> spawnParticleAt(user, position));
-    }
-  }
-
-  private void spawnParticleAt(User user, Position position) {
-    user.player().getWorld().spawnParticle(
-      (Particle) particle(),
-      position.toLocation(user.player().getWorld()),
-      1
-    );
-  }
-
-  private Object particleCache;
-
-  private Object particle() {
-    if (particleCache == null) {
-      try {
-        try {
-          particleCache = Particle.VILLAGER_HAPPY;
-        } catch (NoSuchFieldError e) {
-          particleCache = Particle.class.getField("HAPPY_VILLAGER").get(null);
-        }
-      } catch (IllegalAccessException | NoSuchFieldException e) {
-        throw new RuntimeException(e);
-      }
-    }
-    return particleCache;
+    boxes
+      .stream()
+      .flatMap(box -> box.vertices().stream())
+      .distinct()
+      .forEach(position -> Particles.spawnVillagerHappyParticleAt(user, position));
   }
 
   private void updatePotionEffects(User user) {
@@ -687,7 +621,7 @@ public final class MovementDispatcher extends Module {
     }
     inventory.lastFoodConsumptionBlockRequest = System.currentTimeMillis();
     PacketContainer packet = protocolManager.createPacket(PacketType.Play.Client.BLOCK_DIG);
-    packet.getBlockPositionModifier().write(0, new BlockPosition(0, 0, 0));
+    packet.getBlockPositionModifier().write(0, new com.comphenix.protocol.wrappers.BlockPosition(0, 0, 0));
     packet.getDirections().write(0, EnumWrappers.Direction.DOWN);
     packet.getPlayerDigTypes().write(0, EnumWrappers.PlayerDigType.RELEASE_USE_ITEM);
     user.ignoreNextInboundPacket();
@@ -711,48 +645,45 @@ public final class MovementDispatcher extends Module {
       FLYING, LOOK, POSITION, POSITION_LOOK, VEHICLE_MOVE
     }
   )
-  public void receiveFinalMovement(PacketEvent event) {
-    Player player = event.getPlayer();
-
-    PacketContainer packet = event.getPacket();
-    User user = UserRepository.userOf(player);
-
+  public void receiveFinalMovement(
+    User user,
+    PlayerMoveReader reader,
+    Cancellable cancellable
+  ) {
+    Player player = user.player();
     MetadataBundle meta = user.meta();
     AttackMetadata attack = meta.attack();
     MovementMetadata movement = meta.movement();
-    AbilityMetadata abilityData = meta.abilities();
-    InventoryMetadata inventoryData = meta.inventory();
+    AbilityMetadata abilities = meta.abilities();
+    InventoryMetadata inventory = meta.inventory();
 
-    PacketType packetType = event.getPacketType();
-    boolean vehicleMove = packetType == PacketType.Play.Client.VEHICLE_MOVE;
-    boolean containsCollision = MinecraftVersions.VER1_21_3.atOrAbove();
-    boolean hasMovement = vehicleMove || packet.getBooleans().read(containsCollision ? 2 : 1);
-    boolean hasRotation = vehicleMove || packet.getBooleans().read(containsCollision ? 3 : 2);
-    boolean claimsToBeOnGround = vehicleMove ? player.isOnGround() : packet.getBooleans().read(0);
-
-    for (Superposition<?> superposition : movement.superpositions()) {
-      superposition.completeTick();
-    }
+    boolean vehicleMove = reader.isVehicleMove();
+	  boolean hasMovement = reader.hasMovement();
+    boolean hasRotation = reader.hasRotation();
+    boolean claimsToBeOnGround = vehicleMove ? player.isOnGround() : reader.onGround();
 
     if (player.isDead() || movement.awaitTeleport) {
       return;
     }
 
     if (movement.isInVehicle() && !vehicleMove && hasRotation && !hasMovement) {
-      movement.applyGroundInformationToPacket(packet);
-      movement.verifiedPositionX = movement.positionX;
-      movement.verifiedPositionY = movement.positionY;
-      movement.verifiedPositionZ = movement.positionZ;
-      movement.verifiedPositionOrigin = "Vehicle rotation only, blind copy from current";
+      movement.setVerifiedLastPosition(
+        movement.position(),
+        "Vehicle rotation only, blind copy from current"
+      );
       return;
     }
 
-    if (!vehicleMove && !movement.awaitTeleport && !movement.awaitOutgoingTeleport && !movement.invalidMovement && !movement.dropPostTickMotionProcessing) {
+    if (!vehicleMove && !movement.isSleeping() && !movement.awaitTeleport && !movement.awaitOutgoingTeleport && !movement.invalidMovement && !movement.dropPostTickMotionProcessing) {
       if (claimsToBeOnGround != movement.onGround) {
-        double requiredFallDistance = Collision.present(player, user.meta().movement().boundingBox().grow(0.1, 0.1, 0.1)) ? 0.5 : 0.1;
+        double requiredFallDistance = Collision.present(user, movement, movement.boundingBox().grow(0.1, 0.1, 0.1)) ? 0.5 : 0.1;
+        boolean shulkerInteraction = movement.shulkerXToleranceRemaining > 0 || movement.shulkerYToleranceRemaining > 0 || movement.shulkerZToleranceRemaining > 0;
+        if (shulkerInteraction) {
+          requiredFallDistance = Math.max(requiredFallDistance, 3);
+        }
         if (movement.artificialFallDistance > requiredFallDistance && !movement.onGround && claimsToBeOnGround) {
           Violation violation = Violation.builderFor(Physics.class)
-            .forPlayer(player)
+            .forUser(user)
             .withMessage("claimed to be on ground midair")
             .withDetails("falling " + formatDouble(movement.artificialFallDistance, 2) + " blocks")
             .withVL(0.5)
@@ -760,176 +691,28 @@ public final class MovementDispatcher extends Module {
             .build();
           Modules.violationProcessor().processViolation(violation);
         }
-        if (movement.artificialFallDistance > requiredFallDistance || Math.abs(movement.motionY()) > 0.01) {
-          packet.getBooleans().write(0, movement.onGround);
+        if (movement.artificialFallDistance > requiredFallDistance || Math.abs(movement.offsetMotionY()) > 0.01) {
+          reader.setOnGround(movement.onGround);
         }
       }
     }
 
-    // onGround == true -> falldamage
-
-    if (!event.isCancelled() && !movement.isTeleportConfirmationPacket && !movement.dropPostTickMotionProcessing) {
-      physicsCheck.endMovement(user, hasMovement);
-    }
-
-    // if event is cancelled, we must flush certain states
-    if (event.isCancelled()) {
-      movement.inWeb = false;
-    }
-
-    if (!movement.isTeleportConfirmationPacket) {
-      movement.lastTeleport++;
-    }
-
-    movement.invalidMovement = false;
-    movement.suspiciousMovement = false;
-    movement.isTeleportConfirmationPacket = false;
-    movement.dropPostTickMotionProcessing = false;
-
-    Map<BlockPosition, ShulkerBox> shulkerData = movement.shulkerData;
-    Map<Integer, ShulkerBox> shulkerDataHashCodeAccess = movement.shulkerDataHashCodeAccess;
-    if (!shulkerData.isEmpty()) {
-      int shulkerLimit = 2048;
-      for (Iterator<BlockPosition> iterator = movement.shulkers.iterator(); iterator.hasNext(); ) {
-        if (shulkerLimit-- <= 0) {
-          break;
-        }
-        BlockPosition shulkerBlock = iterator.next();
-        ShulkerBox shulkerBox = shulkerData.get(shulkerBlock);
-        if (shulkerBox == null) {
-          iterator.remove();
-          continue;
-        }
-        if (shulkerBox.complete()) {
-          iterator.remove();
-          shulkerData.remove(shulkerBlock);
-          shulkerDataHashCodeAccess.remove(shulkerBox.hashCode());
-        } else if (shulkerBox.shouldTick()) {
-          shulkerBox.tick();
-        }
-      }
-    }
-
-    if (movement.shulkerXToleranceRemaining > 0) {
-      movement.shulkerXToleranceRemaining--;
-    }
-    if (movement.shulkerYToleranceRemaining > 0) {
-      movement.shulkerYToleranceRemaining--;
-      if (movement.shulkerYToleranceRemaining == 0) {
-        movement.highestShulkerY = Integer.MIN_VALUE;
-        movement.lowestShulkerY = Integer.MAX_VALUE;
-      }
-    }
-    if (movement.shulkerZToleranceRemaining > 0) {
-      movement.shulkerZToleranceRemaining--;
-    }
-
-    if (movement.pistonMotionToleranceRemaining > 0) {
-      movement.pistonMotionToleranceRemaining--;
-    }
-
-    boolean flyingWithElytra = movement.elytraFlying;//movement.pose() == Pose.FALL_FLYING;
-    if (flyingWithElytra) {
-      movement.pastElytraFlying = 0;
-    } else {
-      movement.pastElytraFlying++;
-    }
-//    if (movement.onGround && movement.elytraFlying) {
-//      player.sendMessage(ChatColor.RED + "Deactivated elytra flying");
-//      movement.elytraFlying = false;
-//    }//
-    if (movement.inWeb) {
-      movement.pastInWeb = 0;
-      movement.webTicks++;
-    } else {
-      movement.pastInWeb++;
-      movement.webTicks = 0;
-    }
-    if (inventoryData.inventoryOpen()) {
-      movement.pastInventoryOpen = 0;
-    } else {
-      movement.pastInventoryOpen++;
-    }
-    if (movement.physicsJumped) {
-      movement.lastJump = System.currentTimeMillis();
-    }
-    if (movement.isSneaking()) {
-      movement.ticksSneaking++;
-      if (movement.ticksSneaking > 1) {
-        movement.lastSneakingTimestamps = System.currentTimeMillis();
-      }
-    } else {
-      movement.ticksSneaking = 0;
-    }
-    if (movement.isSprinting()) {
-      movement.ticksSprinting++;
-    } else {
-      movement.ticksSprinting = 0;
-    }
-    attack.attackPastTicks++;
-    movement.pastBlockPlacement++;
-    inventoryData.pastSlotSwitch++;
-    inventoryData.pastHotBarSlotChange++;
-    inventoryData.pastItemUsageTransition++;
-    movement.pastWaterMovement++;
-    movement.pastLavaMovement++;
-    movement.pastVelocity++;
-    movement.pastReceiveVelocityPacket++;
-    movement.pastStep++;
-    movement.pastEdgeSneak++;
-    movement.pastSprintChange++;
-    if (movement.inWater) {
-      movement.waterTicks++;
-    } else {
-      movement.waterTicks = 0;
-    }
-    movement.reduceTicks = 0;
-    movement.ignoredAttackReduce = false;
-    if (hasMovement || hasRotation) {
-      movement.pastExternalVelocity++;
-    }
-    movement.pastLongTeleport++;
-    abilityData.ticksToLastHealthUpdate++;
-    movement.physicsUnpredictableVelocityExpected = false;
-    movement.step = false;
-    movement.lastSprinting = movement.sprintingAllowed();
-    movement.lastSneaking = movement.sneaking;
-    movement.fireworkRocketsTicks++;
-    movement.attachVehicleTicks++;
-    movement.detachVehicleTicks++;
-
-    if (!inventoryData.handActive() && inventoryData.pastHandActiveTicks > 2) {
-      movement.physicsEatingSlotSwitchVL = 0;
-    }
-
-    if (!event.isCancelled() && !movement.isTeleportConfirmationPacket && !movement.dropPostTickMotionProcessing) {
+    if (!cancellable.isCancelled() && !movement.isTeleportConfirmationPacket && !movement.dropPostTickMotionProcessing) {
+      physicsCheck.endMovement(user, hasMovement, hasRotation);
       movement.lastOnGround = movement.onGround;
-      movement.verifiedPositionX = movement.positionX;
-      movement.verifiedPositionY = movement.positionY;
-      movement.verifiedPositionZ = movement.positionZ;
-      movement.verifiedPositionOrigin = "Verification push";
-//      System.out.println("Verified position: " + movement.positionX + " " + movement.positionY + " " + movement.positionZ);
+      movement.setVerifiedLastPosition(
+        movement.position(),
+        "Verification push"
+      );
     }
 
-    if (inventoryData.handActive()) {
-      inventoryData.handActiveTicks++;
-      inventoryData.pastHandActiveTicks = 0;
-    } else {
-      inventoryData.pastHandActiveTicks++;
-      inventoryData.handActiveTicks = 0;
-    }
-
-    if (movement.disabledFlying || !abilityData.allowFlying()) {
-      abilityData.setFlying(false);
-      movement.disabledFlying = false;
-    }
-
-    updateSize(user);
-    movement.externalKeyApply = false;
+    attack.tickComplete();
+    movement.tickComplete(hasMovement, hasRotation, true);
+    abilities.tickComplete();
+    inventory.tickComplete();
 
     Map<String, Double> clientDebugData = movement.clientMovementDebugValues;
     Map<String, Double> serverDebugData = movement.serverMovementDebugValues;
-
     if (!clientDebugData.isEmpty() || !serverDebugData.isEmpty()) {
       if (IntaveControl.MOVEMENT_DEBUGGER_COLLECTOR_POSTTICK_OUTPUT) {
         String message = clientDebugData.entrySet().stream().map(entry -> {
@@ -937,29 +720,16 @@ public final class MovementDispatcher extends Module {
           double value = entry.getValue();
           return "C" + key1 + ":" + formatDouble(value, 4);
         }).collect(Collectors.joining(" "));
-
         message += " " + serverDebugData.entrySet().stream().map(entry -> {
           String key1 = entry.getKey();
           double value = entry.getValue();
           return "S" + key1 + ":" + formatDouble(value, 4);
         }).collect(Collectors.joining(" "));
-
-        String finalMessage = message;
-        Synchronizer.synchronize(() -> {
-          player.sendMessage(finalMessage);
-        });
+        user.sendMessage(message);
       }
       clientDebugData.clear();
       serverDebugData.clear();
     }
-  }
-
-  private void updateSize(User user) {
-    MetadataBundle meta = user.meta();
-    MovementMetadata movementData = meta.movement();
-    Pose pose = movementData.pose();
-    movementData.width = pose.width(user);
-    movementData.height = pose.height(user);
   }
 
   @PacketSubscription(
@@ -972,18 +742,21 @@ public final class MovementDispatcher extends Module {
     User user = UserRepository.userOf(player);
     MovementMetadata movementData = user.meta().movement();
     PacketContainer packet = event.getPacket();
-    if (MinecraftVersions.VER1_21_3.atOrAbove()) {
+    if (MinecraftVersions.VER1_21_3.atOrAbove() && user.meta().protocol().sendsInputs()) {
       StructureModifier<Boolean> inputBooleans = packet.getStructures().read(0).getBooleans();
       movementData.lastInput = movementData.input;
-      Input input = new Input();
-      input.setForward(inputBooleans.read(0));
-      input.setBackward(inputBooleans.read(1));
-      input.setLeft(inputBooleans.read(2));
-      input.setRight(inputBooleans.read(3));
-      input.setJump(inputBooleans.read(4));
-      input.setShift(inputBooleans.read(5));
-      input.setSprint(inputBooleans.read(6));
-      movementData.input = input;
+      movementData.input = new Input(
+        inputBooleans.read(0),
+        inputBooleans.read(1),
+        inputBooleans.read(2),
+        inputBooleans.read(3),
+        inputBooleans.read(4),
+        inputBooleans.read(5),
+        inputBooleans.read(6)
+      );
+      if (user.receives(MessageChannel.DEBUG_SENT_INPUT)) {
+        ActionBar.sendActionBar(player, String.valueOf(movementData.input));
+      }
     } else {
       int strafeKey = (int) (packet.getFloat().read(0) / 0.98f);
       int forwardKey = (int) (packet.getFloat().read(1) / 0.98f);
@@ -992,15 +765,15 @@ public final class MovementDispatcher extends Module {
         return;
       }
       Boolean jumping = packet.getBooleans().read(0);
-      movementData.externalKeyApply = true;
-      movementData.clientStrafeKey = strafeKey;
-      movementData.clientForwardKey = forwardKey;
+      movementData.legacyVehicleKeyInput = true;
+      movementData.legacyVehicleStrafeKey = strafeKey;
+      movementData.legacyVehicleForwardKey = forwardKey;
       movementData.clientPressedJump = jumping;
     }
   }
 
   @PacketSubscription(
-    engine = Engine.ASYNC_INTERNAL,
+    engine = Engine.INTERNAL,
     packetsOut = {
       UPDATE_HEALTH
     }
@@ -1019,72 +792,66 @@ public final class MovementDispatcher extends Module {
   }
 
   @PacketSubscription(
-    priority = ListenerPriority.LOWEST,
     packetsOut = {
-      ENTITY_METADATA
+      WORLD_BORDER,
+      INITIALIZE_BORDER,
+      SET_BORDER_CENTER,
+      SET_BORDER_SIZE,
+      SET_BORDER_LERP_SIZE,
     }
   )
-  public void receiveElytraUpdate(PacketEvent event) {
-    Player player = event.getPlayer();
-    PacketContainer packet = event.getPacket();
-    Integer entityId = packet.getIntegers().read(0);
-
-    if (!ELYTRA_SUPPORTED || entityId != player.getEntityId()) {
-      return;
-    }
-
-    EntityMetadataReader reader = PacketReaders.readerOf(packet);
-    Object elytraObject = reader.fetchRaw(0);
-
-    if (elytraObject == null) {
-      reader.release();
-      return;
-    }
-
-    User user = UserRepository.userOf(player);
-    MetadataBundle meta = user.meta();
-    MovementMetadata movement = meta.movement();
-    ProtocolMetadata protocol = meta.protocol();
-
-    if (!protocol.canUseElytra()) {
-      reader.release();
-      return;
-    }
-
-    if (IntaveControl.DEBUG_ELYTRA) {
-      player.sendMessage("Elytra update received");
-    }
-
-    byte data = (byte) elytraObject;
-    boolean gliding = (data & 1 << 7) != 0;
-
+  public void sentWorldBorderUpdate(
+    User user, PacketEvent event
+  ) {
     user.tickFeedback(() -> {
-      movement.elytraFlying = gliding;
-      movement.updatePose();
-      if (IntaveControl.DEBUG_ELYTRA) {
-        if (gliding) {
-          player.sendMessage("§aActivated elytra flying (metadata)");
-        } else {
-          player.sendMessage("§cDeactivated elytra flying (metadata)");
-        }
+	    try (
+        WorldBorderReader reader = PacketReaders.readerOf(event.getPacket())
+      ) {
+        MovementMetadata movement = user.meta().movement();
+        WorldBorder newBorder = reader.updated(movement.border());
+        movement.setWorldBorder(newBorder);
       }
     });
-
-    reader.release();
   }
 
-  @BukkitEventSubscription(
-    priority = EventPriority.LOWEST,
-    ignoreCancelled = false // this is correct
+  @PacketSubscription(
+    packetsOut = USE_BED
   )
-  public void preventVanillaFallDamage(EntityDamageEvent event) {
-    if (!(event.getEntity() instanceof Player)) {
+  public void playerBedUseCommand(
+    User user, BedUseReader reader, PacketEvent event
+  ) {
+    if (!reader.targetEntityIdIsSameAs(user)) {
       return;
     }
-    User user = UserRepository.userOf((Player) event.getEntity());
-    MovementMetadata movementData = user.meta().movement();
-    if (event.getCause() == EntityDamageEvent.DamageCause.FALL && !movementData.dealCustomFallDamage) {
-      movementData.seenFallDamage = (float) event.getOriginalDamage(EntityDamageEvent.DamageModifier.BASE);
+    de.jpx3.intave.share.BlockPosition sleepingBedPosition = reader.bedPosition();
+    user.sendMessage(IntavePlugin.prefix() + "Player is sleeping in bed at " + sleepingBedPosition);
+    user.packetTickFeedback(event, () -> {
+      user.meta().movement().sleepingBedPosition = sleepingBedPosition;
+    });
+  }
+
+  @PacketSubscription(
+    packetsOut = {ANIMATION}
+  )
+  public void playerAnimationCommand(
+    User user, AnimationReader reader, PacketEvent event
+  ) {
+    if (!reader.targetEntityIdIsSameAs(user)) {
+      return;
+    }
+    if (reader.animation() == AnimationReader.Animation.WAKEUP) {
+      MovementMetadata movement = user.meta().movement();
+      BlockPosition sleepingBedPosition = movement.sleepingBedPosition;
+      if (sleepingBedPosition != null) {
+        Optional<Position> wakeupPosition = BedWakeupPositionSearch.findStandUpPosition(user, sleepingBedPosition, 0);
+        user.packetTickFeedback(event, () -> {
+          wakeupPosition.ifPresent(position -> {
+	          movement.setPosition(position);
+            movement.setVerifiedLastPosition(position, "Bed wakeup");
+          });
+          movement.sleepingBedPosition = null;
+        });
+      }
     }
   }
 
@@ -1095,30 +862,22 @@ public final class MovementDispatcher extends Module {
       ENTITY_VELOCITY
     }
   )
-  public void sentVelocityPacket(PacketEvent event) {
-    Player player = event.getPlayer();
-    PacketContainer packet = event.getPacket();
-    StructureModifier<Integer> integers = packet.getIntegers();
-
-    if (packet.getIntegers().readSafely(0) == player.getEntityId()) {
-      Vector velocity = new Vector(
-        integers.readSafely(1) / 8000d,
-        integers.readSafely(2) / 8000d,
-        integers.readSafely(3) / 8000d
-      );
+  public void sentVelocityPacket(
+    User user, Player player,
+    EntityVelocityReader reader,
+    Cancellable cancellable,
+    PacketEvent event
+  ) {
+    if (reader.entityId() == player.getEntityId()) {
+      Motion motion = reader.motion();
       if (IntaveControl.DEBUG_VELOCITY_RECEIVE) {
-        player.sendMessage("§a" + MathHelper.formatMotion(velocity));
+        player.sendMessage("§a" + MathHelper.formatMotion(motion));
       }
-      User user = UserRepository.userOf(player);
       MetadataBundle meta = user.meta();
       MovementMetadata movementData = meta.movement();
-      ViolationMetadata violationMetadata = meta.violationLevel();
-      if (movementData.willReceiveSetbackVelocity && velocity.length() < 0.001) {
+      if (movementData.willReceiveSetbackVelocity && motion.length() < 0.001) {
         movementData.willReceiveSetbackVelocity = false;
-        velocity = movementData.setbackOverrideVelocity;
-        integers.writeSafely(1, (int) (velocity.getX() * 8000d));
-        integers.writeSafely(2, (int) (velocity.getY() * 8000d));
-        integers.writeSafely(3, (int) (velocity.getZ() * 8000d));
+        reader.setMotion(movementData.setbackOverrideVelocity);
         return;
       }
       /*
@@ -1136,48 +895,82 @@ public final class MovementDispatcher extends Module {
 
         Modules.violationProcessor().processViolation(violation);
         if (pendingVelocityPackets < 6) {
-          velocity.setX(velocity.getX() / pendingVelocityPackets);
-          velocity.setY(Math.min(0, velocity.getY()));
-          velocity.setZ(velocity.getZ() / pendingVelocityPackets);
-          integers.writeSafely(1, (int) (velocity.getX() * 8000d));
-          integers.writeSafely(2, (int) (velocity.getY() * 8000d));
-          integers.writeSafely(3, (int) (velocity.getZ() * 8000d));
-        } else {
-          if (event.isReadOnly()) {
-            event.setReadOnly(false);
-          }
-          event.setCancelled(true);
+          motion.setMotionX(motion.motionX() / pendingVelocityPackets);
+          motion.setMotionY(Math.min(0, motion.motionY()));
+          motion.setMotionZ(motion.motionZ() / pendingVelocityPackets);
+          reader.setMotion(motion);
+        } else if (!event.isReadOnly()){
+          cancellable.setCancelled(true);
           return;
         }
       }
 
       movementData.pendingVelocityPackets.incrementAndGet();
-      movementData.emulationVelocity = velocity.clone();
+      movementData.emulationVelocity = motion.copy();
       if (movementData.sneaking) {
-        movementData.sneakPatchVelocity = velocity.clone();
+        movementData.sneakPatchVelocity = motion.copy();
       }
-//      Motion motion = Motion.fromVector(velocity);
-      // this caused more problems than it solved
-//      if (
-//        Physics.USE_SUPERPOSITIONS && violationMetadata.physicsOffset < 0.5 &&
-//        /* on 1.19.4 we use bundles */ !MinecraftVersions.VER1_19_4.atOrAbove()
-//      ) {
-//        movementData.velocitySuperposition().stateSynchronize(
-//          event, motion, begin -> {},
-//          end -> movementData.pendingVelocityPackets.decrementAndGet()
-//        );
-//      } else {
-      Vector finalVelocity = velocity;
-      user.packetTickFeedback(event, () -> {
-        receiveVelocity(player, finalVelocity);
-        movementData.pendingVelocityPackets.decrementAndGet();
-      });
-//      }
-      movementData.pastReceiveVelocityPacket = 0;
+
+      Motion finalVelocity = motion.copy();
+
+      AtomicReference<MotionSetUpdate> velocity = new AtomicReference<>(null);
+      user.doubleTickFeedback(event,
+        () -> {
+	        velocity.set(MotionSetUpdate.openEnded(
+		        finalVelocity,
+		        movementData
+	        ));
+          movementData.queueTickAmbiguousUpdate(velocity.get());
+        },
+        () -> {
+          MotionSetUpdate myMotionSetUpdate = velocity.get();
+          if (myMotionSetUpdate != null) {
+            myMotionSetUpdate.canNotRunAfterThisTick(movementData);
+          }
+          // legacy behavior
+          receiveVelocity(player, finalVelocity);
+          movementData.pendingVelocityPackets.decrementAndGet();
+        }
+      );
+
+      movementData.activeTick(RECEIVED_VELOCITY_PACKET);
     }
   }
 
-  private void receiveVelocity(Player player, Vector velocity) {
+  @PacketSubscription(
+    priority = ListenerPriority.HIGH,
+    packetsOut = {
+      EXPLOSION
+    }
+  )
+  public void sentExplosion(
+    User user, ExplosionReader reader,
+    PacketEvent event
+  ) {
+    MovementMetadata movement = user.meta().movement();
+    Motion knockback = reader.motion();
+    if (knockback != null) {
+      AtomicReference<MotionAddUpdate> update = new AtomicReference<>(null);
+      user.doubleTickFeedback(event,
+        () -> {
+          update.set(MotionAddUpdate.openEnded(
+            knockback,
+            movement
+          ));
+          movement.queueTickAmbiguousUpdate(update.get());
+        },
+        () -> {
+          MotionAddUpdate myMotionAddUpdate = update.get();
+          if (myMotionAddUpdate != null) {
+            myMotionAddUpdate.canNotRunAfterThisTick(movement);
+          }
+          movement.pendingVelocityPackets.decrementAndGet();
+        }
+      );
+    }
+  }
+
+  private void receiveVelocity(Player player, Motion velocity) {
     User user = UserRepository.userOf(player);
     MetadataBundle meta = user.meta();
     ViolationMetadata violationLevelData = meta.violationLevel();
@@ -1186,20 +979,17 @@ public final class MovementDispatcher extends Module {
       movementData.baseMotionXBeforeVelocity = movementData.baseMotionX;
       movementData.baseMotionYBeforeVelocity = movementData.baseMotionY;
       movementData.baseMotionZBeforeVelocity = movementData.baseMotionZ;
-      movementData.baseMotionX = velocity.getX();
-      movementData.baseMotionY = velocity.getY();
-      movementData.baseMotionZ = velocity.getZ();
-      movementData.lastVelocity = velocity.clone();
+//      movementData.setBaseMotion(velocity);
+      movementData.lastVelocity = velocity.copy();
       if (!movementData.willReceiveSetbackVelocity && !movementData.willReceiveFinalSetbackVelocity) {
-        movementData.pastExternalVelocity = 0;
+        movementData.activeTick(EXTERNAL_VELOCITY);
       }
       movementData.willReceiveSetbackVelocity = false;
       movementData.willReceiveFinalSetbackVelocity = false;
       PacketLogging logging = Modules.tracker().packetLogging();
       logging.logSystemMessage(user, () -> "MOTION LOGIC: Velocity base motion set to " + MathHelper.formatMotion(velocity));
     }
-    movementData.pastVelocity = 0;
-//    movementData.pendingVelocityPackets.decrementAndGet();
+    movementData.activeTick(VELOCITY);
   }
 
   private static final Set<Material> SHULKER_BOX_MATERIALS = MaterialSearch.materialsThatContain("SHULKER_BOX");
@@ -1265,11 +1055,11 @@ public final class MovementDispatcher extends Module {
       if (isExtending) {
         Modules.feedback().synchronize(player, nothing -> {
           // First off, check if the player is even affected by this
-          NativeVector directionVec = facing.directionVector();
+          RawVector3d directionVec = facing.directionVector();
           BoundingBox pistonCollisionArea = new BoundingBox(0, 0, 0, 1.1f, 1.1f, 1.1f);
-          int expectedPistonX = (int) directionVec.xCoord + blockPosition.getX();
-          int expectedPistonY = (int) directionVec.yCoord + blockPosition.getY();
-          int expectedPistonZ = (int) directionVec.zCoord + blockPosition.getZ();
+          int expectedPistonX = (int) directionVec.x() + blockPosition.getX();
+          int expectedPistonY = (int) directionVec.y() + blockPosition.getY();
+          int expectedPistonZ = (int) directionVec.z() + blockPosition.getZ();
           BoundingBox expandingBlockArea = pistonCollisionArea.offset(expectedPistonX, expectedPistonY, expectedPistonZ);
           boolean playerAffected = expandingBlockArea.intersectsWith(user.meta().movement().boundingBox());
 
@@ -1288,13 +1078,13 @@ public final class MovementDispatcher extends Module {
             switch (facing.axis()) {
               case X_AXIS: {
                 // Magical hack to get the proper bounding box factor
-                float horizontalBoundingBoxFactor = (float) (user.meta().movement().width() / 2f * directionVec.xCoord);
+                float horizontalBoundingBoxFactor = (float) (user.meta().movement().width() / 2f * directionVec.x());
                 movement.pistonHorizontalAllowance = xOffset + horizontalBoundingBoxFactor + 0.05f;
                 break;
               }
               case Z_AXIS: {
                 // Magical hack to get the proper bounding box factor
-                float horizontalBoundingBoxFactor = (float) (user.meta().movement().width() / 2f * directionVec.zCoord);
+                float horizontalBoundingBoxFactor = (float) (user.meta().movement().width() / 2f * directionVec.z());
                 movement.pistonHorizontalAllowance = zOffset + horizontalBoundingBoxFactor + 0.05f;
                 break;
               }
@@ -1351,142 +1141,107 @@ public final class MovementDispatcher extends Module {
     MetadataBundle meta = user.meta();
     MovementMetadata movementData = meta.movement();
     ProtocolMetadata protocol = meta.protocol();
-    PunishmentMetadata punishmentData = meta.punishment();
     switch (reader.playerAction()) {
       case START_SPRINTING:
         if (allowSprinting(user)) {
           movementData.setSprinting(true);
-          if (IntaveControl.DEBUG_PLAYER_ACTIONS) {
+          if (IntaveControl.DEBUG_PLAYER_ACTIONS || user.receives(MessageChannel.DEBUG_PLAYER_ACTIONS)) {
             user.player().sendMessage(ChatColor.WHITE + "Start sprinting " + meta.attack().attackPastTicks);
           }
         }
         break;
       case STOP_SPRINTING:
-        int ticksSprinting = movementData.ticksSprinting;
+        int ticksSprinting = movementData.ticks(SPRINTING);
         movementData.setSprinting(false);
-        if (IntaveControl.DEBUG_PLAYER_ACTIONS) {
+        if (IntaveControl.DEBUG_PLAYER_ACTIONS || user.receives(MessageChannel.DEBUG_PLAYER_ACTIONS)) {
           user.player().sendMessage(ChatColor.BLACK + "Stop sprinting after " + ticksSprinting + " " + meta.attack().attackPastTicks);
         }
         break;
       case PRESS_SHIFT_KEY:
       case START_SNEAKING:
-        if (System.currentTimeMillis() - punishmentData.timeLastSneakToggleCancel < 2000) {
-          cancelable.setCancelled(true);
-        }
-        movementData.pastVehicleExitTicks = 0;
-        if (movementData.isInVehicle()) {
-          movementData.dismountRidingEntity("Sneak exit");
-          movementData.sneaking = false;
-        } else {
-          movementData.sneaking = true;
-        }
-        if (IntaveControl.DEBUG_PLAYER_ACTIONS) {
-          user.player().sendMessage(ChatColor.GREEN + "Start sneaking " + movementData.sneaking);
-        }
-//        player.sendMessage("Sneaking: " + movementData.isSneaking());
-//        movementData.setPose(movementData.isSneaking() ? Pose.CROUCHING : Pose.STANDING);
+        startSneak(user, cancelable);
         break;
       case RELEASE_SHIFT_KEY:
       case STOP_SNEAKING:
-        movementData.sneaking = false;
-        if (IntaveControl.DEBUG_PLAYER_ACTIONS) {
-          user.player().sendMessage(ChatColor.RED + "Stop sneaking after " + movementData.ticksSneaking);
-        }
-//        player.sendMessage("Sneaking: " + movementData.isSneaking());
-//        movementData.setPose(Pose.STANDING);
+        stopSneak(user);
         break;
       case START_FALL_FLYING:
         if (movementData.hasElytraEquipped() && protocol.canUseElytra()) {
           if (protocol.serversideElytra()) {
-            movementData.elytraFlying = true;
+            movementData.gliding = true;
             if (IntaveControl.DEBUG_ELYTRA) {
               user.player().sendMessage(ChatColor.GREEN + "Activated elytra flying (START_FALL_FLYING)");
             }
-            movementData.setPose(Pose.FALL_FLYING);
+            movementData.manualPoseSet(Pose.FALL_FLYING);
           }
         }
+        break;
+    }
+  }
+
+  @PacketSubscription(
+    packetsIn = {
+      STEER_VEHICLE
+    }
+  )
+  public void onInputs(
+    PacketEvent event
+  ) {
+    PacketContainer packet = event.getPacket();
+    Player player = event.getPlayer();
+    User user = UserRepository.userOf(player);
+    if (!user.meta().protocol().sneakAsVehicleSteer()) {
+      return;
+    }
+    MovementMetadata movement = user.meta().movement();
+    StructureModifier<Input> inputs = packet.getModifier().withType(
+      InputConverter.inputClass, InputConverter.INSTANCE
+    );
+    Input input = inputs.read(0);
+    boolean sneaking = input.sneakKey();
+    if (sneaking && !movement.sneaking) {
+      startSneak(user, event);
+    } else if (!sneaking && movement.sneaking) {
+      stopSneak(user);
+    }
+  }
+
+  private void startSneak(User user, Cancellable cancelable) {
+    PunishmentMetadata punishmentData = user.meta().punishment();
+    MovementMetadata movementData = user.meta().movement();
+    if (System.currentTimeMillis() - punishmentData.timeLastSneakToggleCancel < 2000) {
+      cancelable.setCancelled(true);
+    }
+    movementData.activeTick(VEHICLE_EXIT);
+    if (movementData.isInVehicle()) {
+      movementData.dismountRidingEntity("Sneak exit");
+//      movementData.queueTickAmbiguousUpdate(
+//        SneakingUpdate.sneaking(false, movementData)
+//      );
+      movementData.setSneaking(false);
+    } else {
+//      movementData.queueTickAmbiguousUpdate(
+//        SneakingUpdate.sneaking(true, movementData)
+//      );
+      movementData.setSneaking(true);
+    }
+    if (IntaveControl.DEBUG_PLAYER_ACTIONS || user.receives(MessageChannel.DEBUG_PLAYER_ACTIONS)) {
+      user.player().sendMessage(ChatColor.GREEN + "Start sneaking " + movementData.sneaking);
+    }
+  }
+
+  private void stopSneak(User user) {
+    MovementMetadata movementData = user.meta().movement();
+//    movementData.queueTickAmbiguousUpdate(
+//      SneakingUpdate.sneaking(false, movementData)
+//    );
+    movementData.setSneaking(false);
+    if (IntaveControl.DEBUG_PLAYER_ACTIONS || user.receives(MessageChannel.DEBUG_PLAYER_ACTIONS)) {
+      user.player().sendMessage(ChatColor.RED + "Stop sneaking after " + movementData.ticks(SNEAKING));
     }
   }
 
   private boolean allowSprinting(User user) {
     return !user.meta().inventory().inventoryOpen();
-  }
-
-  public static void applyVelocitySuperposition(User user, Motion velocity) {
-    MetadataBundle meta = user.meta();
-    MovementMetadata movementData = meta.movement();
-    ViolationMetadata violationLevelData = meta.violationLevel();
-
-    movementData.pastExternalVelocityResetCache = movementData.pastExternalVelocity;
-    movementData.baseMotionXBeforeVelocityResetCache = movementData.baseMotionXBeforeVelocity;
-    movementData.baseMotionYBeforeVelocityResetCache = movementData.baseMotionYBeforeVelocity;
-    movementData.baseMotionZBeforeVelocityResetCache = movementData.baseMotionZBeforeVelocity;
-    movementData.baseMotionXResetCache = movementData.baseMotionX;
-    movementData.baseMotionYResetCache = movementData.baseMotionY;
-    movementData.baseMotionZResetCache = movementData.baseMotionZ;
-    movementData.willReceiveSetbackVelocityResetCache = movementData.willReceiveSetbackVelocity;
-
-    if (!violationLevelData.isInActiveTeleportBundle) {
-      movementData.baseMotionXBeforeVelocity = movementData.baseMotionX;
-      movementData.baseMotionYBeforeVelocity = movementData.baseMotionY;
-      movementData.baseMotionZBeforeVelocity = movementData.baseMotionZ;
-      movementData.baseMotionX = velocity.motionX();
-      movementData.baseMotionY = velocity.motionY();
-      movementData.baseMotionZ = velocity.motionZ();
-//      user.player().sendMessage("Applied velocity " + velocity);
-      movementData.lastVelocity = new Vector(velocity.motionX(), velocity.motionY(), velocity.motionZ());
-    }
-  }
-
-  public static void collapseVelocitySuperposition(User user, @Nullable Motion velocity) {
-    if (velocity != null) {
-      MetadataBundle meta = user.meta();
-      MovementMetadata movementData = meta.movement();
-      movementData.pastVelocity = 0;
-//      movementData.pendingVelocityPackets.decrementAndGet();
-      if (!movementData.willReceiveSetbackVelocity) {
-        movementData.pastExternalVelocity = 0;
-      }
-      movementData.willReceiveSetbackVelocity = false;
-//      user.player().sendMessage("Collapsed velocity " + velocity);
-//      if (!movementData.willReceiveSetbackVelocity) {
-//        movementData.pastExternalVelocity = 0;
-//      }
-//      movementData.willReceiveSetbackVelocity = false;
-//      user.player().sendMessage("Collapsed velocity " + velocity + ", pending: " + movementData.pendingVelocityPackets.get());
-    }
-  }
-
-  public static void resetVelocitySuperposition(User user) {
-    MetadataBundle meta = user.meta();
-    MovementMetadata movementData = meta.movement();
-
-    movementData.pastExternalVelocity = movementData.pastExternalVelocityResetCache;
-    movementData.baseMotionXBeforeVelocity = movementData.baseMotionXBeforeVelocityResetCache;
-    movementData.baseMotionYBeforeVelocity = movementData.baseMotionYBeforeVelocityResetCache;
-    movementData.baseMotionZBeforeVelocity = movementData.baseMotionZBeforeVelocityResetCache;
-    movementData.baseMotionX = movementData.baseMotionXResetCache;
-    movementData.baseMotionY = movementData.baseMotionYResetCache;
-    movementData.baseMotionZ = movementData.baseMotionZResetCache;
-    movementData.willReceiveSetbackVelocity = movementData.willReceiveSetbackVelocityResetCache;
-  }
-
-  private Motion readExplosionMotion(PacketEvent event) {
-    PacketContainer packet = event.getPacket();
-    if (NEW_EXPLOSION) {
-      Optional<Vector> read = packet.getOptionals(BukkitConverters.getVectorConverter()).read(0);
-      if (read.isPresent()) {
-        Vector vector = read.get();
-        return new Motion(vector.getX(), vector.getY(), vector.getZ());
-      } else {
-        return null;
-      }
-    } else {
-      StructureModifier<Float> floats = packet.getFloat();
-      double motionX = floats.readSafely(1);
-      double motionY = floats.readSafely(2);
-      double motionZ = floats.readSafely(3);
-      return new Motion(motionX, motionY, motionZ);
-    }
   }
 }

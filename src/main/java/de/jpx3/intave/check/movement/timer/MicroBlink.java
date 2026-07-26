@@ -1,3 +1,14 @@
+/*
+ * Copyright 2026 Intave
+ *
+ * This software is licensed under the PolyForm Perimeter License 1.0.0.
+ * You may use this software for any purpose, except for providing to
+ * others any product that competes with the software.
+ *
+ * A copy of the license is available at:
+ *   https://polyformproject.org/licenses/perimeter/1.0.0/
+ */
+
 package de.jpx3.intave.check.movement.timer;
 
 import com.comphenix.protocol.events.PacketEvent;
@@ -23,7 +34,9 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static com.comphenix.protocol.wrappers.EnumWrappers.EntityUseAction.ATTACK;
+import static de.jpx3.intave.check.movement.physics.environment.MoveMetric.TELEPORT;
 import static de.jpx3.intave.math.MathHelper.formatDouble;
+import static de.jpx3.intave.module.linker.packet.PacketId.Client.ATTACK_ENTITY;
 import static de.jpx3.intave.module.linker.packet.PacketId.Client.USE_ENTITY;
 import static de.jpx3.intave.module.mitigate.AttackNerfStrategy.*;
 
@@ -34,7 +47,7 @@ public class MicroBlink extends MetaCheckPart<Timer, MicroBlink.MicroBlinkMeta> 
   }
 
   @PacketSubscription(
-    packetsIn = USE_ENTITY
+    packetsIn = {ATTACK_ENTITY, USE_ENTITY}
   )
   public void receiveUseEntity(
     User user, EntityUseReader reader, Cancellable cancellable
@@ -64,7 +77,7 @@ public class MicroBlink extends MetaCheckPart<Timer, MicroBlink.MicroBlinkMeta> 
     User user = userOf(event.getPlayer());
     MicroBlinkMeta meta = metaOf(user);
     MovementMetadata movement = user.meta().movement();
-    double horizontalDistance = movement.motion().horizontalLength();
+    double horizontalDistance = movement.sentOffsetMotion().horizontalLength();
     long pastAttack = System.currentTimeMillis() - meta.lastAttack;
 
     Histogram timeHistogram = meta.timeHistogram;
@@ -177,7 +190,7 @@ public class MicroBlink extends MetaCheckPart<Timer, MicroBlink.MicroBlinkMeta> 
         }
 //      }
 
-      if (probability < 0.000001 && timeDifference > 150 && timeDifference < 400 && pastAttack < 1250 && movement.lastTeleport > 5) {
+      if (probability < 0.000001 && timeDifference > 150 && timeDifference < 400 && pastAttack < 1250 && movement.ticksPast(TELEPORT) > 5) {
         if (++meta.violationLevel > 5) {
           Map<String, String> granular = new HashMap<>();
           granular.put("delay", String.valueOf(timeDifference));

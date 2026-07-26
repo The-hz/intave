@@ -35,12 +35,18 @@ public final class ViaVersion5Access implements ViaVersionAccess {
 //      ViaVersionConfig config = Via.getConfig();
       Object config = apiAccessorClass.getMethod("getConfig").invoke(viaVersionTarget);
       Class<?> configurationClass = Class.forName("com.viaversion.viaversion.configuration.AbstractViaConfig");
-      Field maxPPSField = configurationClass.getDeclaredField("warningPPS");
-      if (!maxPPSField.isAccessible()) {
-        maxPPSField.setAccessible(true);
+
+      try {
+        Field maxPPSField = configurationClass.getDeclaredField("warningPPS");
+        if (!maxPPSField.isAccessible()) {
+          maxPPSField.setAccessible(true);
+        }
+        int maxpps = maxPPSField.getInt(config);
+        maxPPSField.set(config, Math.max(maxpps, 600));
+      } catch (NoSuchFieldException ex) {
+//        ignore
       }
-      int maxpps = maxPPSField.getInt(config);
-      maxPPSField.set(config, Math.max(maxpps, 600));
+
       try {
         Field fix121PlacementField = configurationClass.getDeclaredField("fix1_21PlacementRotation");
         if (!fix121PlacementField.isAccessible()) {
@@ -83,13 +89,12 @@ public final class ViaVersion5Access implements ViaVersionAccess {
 
   @Override
   public boolean available(String version) {
-    List<String> supportedVersions = Arrays.asList("4.1", "4.9", "5.0", "5.1", "5.2", "5.3");
+    List<String> supportedVersions = Arrays.asList("4.1", "4.9", "5.");
     return supportedVersions.stream().anyMatch(version::startsWith);
   }
 
   @Override
   public String version() {
     return Bukkit.getPluginManager().getPlugin("ViaVersion").getDescription().getVersion();
-
   }
 }

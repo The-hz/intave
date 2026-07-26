@@ -1,30 +1,30 @@
+/*
+ * Copyright 2026 Intave
+ *
+ * This software is licensed under the PolyForm Perimeter License 1.0.0.
+ * You may use this software for any purpose, except for providing to
+ * others any product that competes with the software.
+ *
+ * A copy of the license is available at:
+ *   https://polyformproject.org/licenses/perimeter/1.0.0/
+ */
+
 package de.jpx3.intave.block.cache;
 
-import de.jpx3.intave.block.shape.BlockShape;
-import de.jpx3.intave.block.shape.BlockShapes;
+import de.jpx3.intave.share.BlockState;
 import org.bukkit.Material;
 import org.bukkit.World;
 import org.jetbrains.annotations.NotNull;
 
 final class EmptyExtendedBlockStateCache implements BlockCache {
   @Override
-  public @NotNull BlockShape outlineShapeAt(int posX, int posY, int posZ) {
-    return BlockShapes.emptyShape();
+  public BlockState peekStateAt(int posX, int posY, int posZ) {
+    return BlockState.empty();
   }
 
   @Override
-  public @NotNull BlockShape collisionShapeAt(int posX, int posY, int posZ) {
-    return BlockShapes.emptyShape();
-  }
-
-  @Override
-  public @NotNull Material typeAt(int posX, int posY, int posZ) {
-    return Material.AIR;
-  }
-
-  @Override
-  public int variantIndexAt(int posX, int posY, int posZ) {
-    return 0;
+  public @NotNull BlockState stateAt(int posX, int posY, int posZ) {
+    return BlockState.empty();
   }
 
   @Override
@@ -75,11 +75,6 @@ final class EmptyExtendedBlockStateCache implements BlockCache {
   @Override
   public boolean currentlyInOverride(int posX, int posY, int posZ) {
     return false;
-  }
-
-  @Override
-  public BlockState overrideOf(int posX, int posY, int posZ) {
-    return null;
   }
 
   @Override
